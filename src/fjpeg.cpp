@@ -29,10 +29,10 @@ typedef struct fjpeg_bitstream {
         if (offset + bits >= 32) {
             // Flush the buffer
             while(offset >= 8) {
-                buffer.push_back(current & 0xff);
-                current >>= 8;
+                buffer.push_back((current>>(offset-8)) & 0xff);                
                 offset -= 8;
             }
+            current &= ((~0) >> 32-offset);
         }
         // Write the remaining bits
         current <<= bits;
@@ -42,7 +42,12 @@ typedef struct fjpeg_bitstream {
 
     void flushToFile() {
         if (offset > 0) {
-            buffer.push_back(current & 0xFF);
+            if(offset&7) current <<= (8-(offset&7));
+            while(offset >= 8) {
+                buffer.push_back((current>>(offset-8)) & 0xff);
+                offset -= 8;
+            }
+            current &= ((~0) >> 32-offset);
         }
         fwrite(buffer.data(), 1, buffer.size(), fp);
         buffer.clear();
