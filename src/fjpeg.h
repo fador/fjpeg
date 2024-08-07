@@ -123,9 +123,9 @@ static uint8_t fjpeg_generate_tables(fjpeg_huffman_table_t* output_table, const 
     fjpeg_huffman_table_t table[256];
     memset(table, 0, 256 * sizeof(fjpeg_huffman_table_t));
     memset(output_table, 0, 256 * sizeof(fjpeg_huffman_table_t));
-
+    
     while(i <= 16) {
-        while(j <= data->bits[i]) {
+        while(j <= data->bits[i-1]) {
             table[k].len = i;
             j++;
             k++;
@@ -157,10 +157,11 @@ static uint8_t fjpeg_generate_tables(fjpeg_huffman_table_t* output_table, const 
           }
         }
     }
+
     // Order tables
     for(int i = 0; i < 256; i++) {
       if(data->val[i] == 0xFF) break;
-      output_table[i] = table[data->val[i]];
+      output_table[data->val[i]] = table[i];
       table_len++;
     }
 
@@ -220,6 +221,15 @@ typedef struct fjpeg_context {
         memcpy(fjpeg_chrominance_quantization_table, fjpeg_default_chroma_quant_table, 64);
 
         fjpeg_generate_tables(fjpeg_huffman_luma_dc, &fjpeg_default_huffman_luma_dc);
+        for(int i = 0; i < 256; i++) {
+            if(fjpeg_huffman_luma_dc[i].len == 0) continue;
+            printf("%i\t%i\t", i, fjpeg_huffman_luma_dc[i].len);
+            for(int ii = fjpeg_huffman_luma_dc[i].len-1; ii >= 0; ii--) {
+                printf("%i",(fjpeg_huffman_luma_dc[i].code>>ii)&1);
+            }
+            printf("\r\n");
+        }
+
         fjpeg_generate_tables(fjpeg_huffman_luma_ac, &fjpeg_default_huffman_luma_ac);
         fjpeg_generate_tables(fjpeg_huffman_chroma_dc, &fjpeg_default_huffman_chroma_dc);
         fjpeg_generate_tables(fjpeg_huffman_chroma_ac, &fjpeg_default_huffman_chroma_ac);
