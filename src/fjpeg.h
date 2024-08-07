@@ -22,14 +22,17 @@
 #define FJPEG_CLAMP(x, min, max) FJPEG_MIN(FJPEG_MAX((x), (min)), (max))
 
 typedef uint8_t fjpeg_pixel_t;
-typedef int32_t fjpeg_coeff_t;
+typedef float fjpeg_coeff_t;
 
+#define FJPEG_UINT32_MAX 0xFFFFFFFF
+#define FJPEG_BLOCK_SIZE 8
 
 typedef struct {
     uint8_t len;
     uint16_t code;
 } fjpeg_huffman_table_t;
 
+#define FJPEG_Q_FACTOR_SCALE 50
 // Set default quant
 const uint8_t fjpeg_default_luma_quant_table[64] = { 
   16, 11, 10, 16, 124, 140, 151, 161,
@@ -225,6 +228,24 @@ typedef struct fjpeg_context {
         memcpy(&fjpeg_short_huffman_chroma_ac, &fjpeg_default_huffman_chroma_ac, sizeof(fjpeg_short_huffman_table_t));
         memcpy(&fjpeg_short_huffman_luma_dc, &fjpeg_default_huffman_luma_dc, sizeof(fjpeg_short_huffman_table_t));
         memcpy(&fjpeg_short_huffman_luma_ac, &fjpeg_default_huffman_luma_ac, sizeof(fjpeg_short_huffman_table_t));        
+    }
+
+    bool setQuality(int quality) {
+        if (quality < 1 || quality > 100) {
+            return false;
+        }
+
+        this->quality = quality;
+
+        for (int i = 0; i < 64; i++) {
+            int scaled_value_y = ((int32_t)fjpeg_default_luma_quant_table[i] * quality + FJPEG_Q_FACTOR_SCALE / 2) / FJPEG_Q_FACTOR_SCALE;
+            int scaled_value_u = ((int32_t)fjpeg_default_chroma_quant_table[i] * quality + FJPEG_Q_FACTOR_SCALE / 2) / FJPEG_Q_FACTOR_SCALE;
+            
+            fjpeg_luminance_quantization_table[i] = FJPEG_CLAMP(scaled_value_y, 1, 255);
+            fjpeg_chrominance_quantization_table[i] = FJPEG_CLAMP(scaled_value_u, 1, 255);
+        }
+
+        return true;
     }
 
     bool readInput(const char* filename, int width, int height) {
