@@ -72,14 +72,14 @@ fjpeg_coeff_t* fjpeg_dct8x8(fjpeg_pixel_t* block, fjpeg_coeff_t* out) {
     for (int v = 0; v < FJPEG_BLOCK_SIZE; v++) {
         for (int u = 0; u < FJPEG_BLOCK_SIZE; u++) {
             float sum = 0.0f;
-            for (int y = 0; y < FJPEG_BLOCK_SIZE; y++) {
-                for (int x = 0; x < FJPEG_BLOCK_SIZE; x++) {
-                    float cu = (u == 0) ? 1.0f / sqrtf(2.f) : 1.0f;  // Scaling factors
-                    float cv = (v == 0) ? 1.0f / sqrtf(2.f) : 1.0f;
-                    sum += block[y*FJPEG_BLOCK_SIZE+x] * cos((2.f * x + 1.f) * u * M_PI / 16.f) * cos((2.f * y + 1.f) * v * M_PI / 16.f) * cu * cv;
+            float cu = (u == 0) ? 1.0f / sqrtf(2.f) : 1.0f;  // Scaling factors
+            float cv = (v == 0) ? 1.0f / sqrtf(2.f) : 1.0f;
+            for (int x = 0; x < FJPEG_BLOCK_SIZE; x++) {
+                for (int y = 0; y < FJPEG_BLOCK_SIZE; y++) {                    
+                    sum += (((float)block[y*FJPEG_BLOCK_SIZE+x])-128.f) * cosf((2.f * x + 1.f) * u * M_PI / 16.f) * cosf((2.f * y + 1.f) * v * M_PI / 16.f);
                 }
             }
-            out[v*FJPEG_BLOCK_SIZE+u] = 0.25f * sum;  // Apply constant factor
+            out[v*FJPEG_BLOCK_SIZE+u] = 0.25f * sum  * cu * cv;  // Apply constant factor
         }
     }
     return out;
@@ -96,7 +96,7 @@ fjpeg_pixel_t* fjpeg_idct8x8(fjpeg_coeff_t* block, fjpeg_pixel_t* out) {
                     sum += cu * cv * block[v*FJPEG_BLOCK_SIZE+u] * cosf((2.f * x + 1.f) * u * M_PI / 16.f) * cosf((2.f * y + 1.f) * v * M_PI / 16.f);
                 }
             }
-            out[y*FJPEG_BLOCK_SIZE+x] = 0.25f * sum;  // Apply constant factor
+            out[y*FJPEG_BLOCK_SIZE+x] = (fjpeg_pixel_t)((0.25f * sum)+128.0f);  // Apply constant factor
         }
     }
     return out;
@@ -107,7 +107,7 @@ fjpeg_coeff_t* fjpeg_quant8x8(fjpeg_context* context, fjpeg_coeff_t* input, fjpe
     uint8_t *quant_table = table == 0 ? context->fjpeg_luminance_quantization_table : context->fjpeg_chrominance_quantization_table;
 
     for (int i = 0; i < 64; i++) {
-        output[i] = input[i] / quant_table[i];
+        output[i] = input[i] / (float)quant_table[i];
     }
 
     return output;
@@ -203,6 +203,12 @@ int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, 
             i++;
             coeff = (int)(block[i]+0.5f);            
         }
+        // Check for EOB after encoding each coefficient
+        if (i == FJPEG_BLOCK_SIZE - 1 || (run_length >= 15 && coeff == 0)) {
+            printf("EOB\r\n");
+            stream->writeBits(context->fjpeg_huffman_luma_ac[0x00].code, context->fjpeg_huffman_luma_ac[0x00].len); // EOB
+            break;
+        }
 
         // Encode the DC coefficient
         if (i == 0) {
@@ -212,10 +218,6 @@ int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, 
             int orig_diff = diff;
             int sign = (diff < 0) ? 1 : 0;
             int size = 0;
-            if(!diff) {
-                stream->writeBits(context->fjpeg_huffman_luma_dc[0].code, context->fjpeg_huffman_luma_dc[0].len); // Write size code
-                continue;
-            }
             // VLI encoding for DC coefficients
             if (sign) diff = -diff;            
             while (diff != 0) {
@@ -229,8 +231,8 @@ int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, 
                 exit(1);
             }
 
-            printf("Writing DC coeff %d (last %d) size %d huff len %d %d\n", orig_diff, size, context->fjpeg_huffman_luma_dc[size].len, context->fjpeg_huffman_luma_dc[size].code);
-            stream->writeBits(context->fjpeg_huffman_luma_dc[size+1].code, context->fjpeg_huffman_luma_dc[size+1].len); // Write size code
+            printf("Writing DC coeff %d size %d huff len %d %d\n", orig_diff, size, context->fjpeg_huffman_luma_dc[size].len, context->fjpeg_huffman_luma_dc[size].code);
+            stream->writeBits(context->fjpeg_huffman_luma_dc[size].code, context->fjpeg_huffman_luma_dc[size].len); // Write size code
             if(size != 0) {
                 diff = orig_diff;
                 if(sign) {
@@ -240,10 +242,9 @@ int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, 
                 printf("Writing DC coeff %d size %d\n", diff, size);
                 stream->writeBits(diff, size); // Write diff value
             }            
-        } 
-        // Encode the AC coefficient
+        }       // Encode the AC coefficient
         else {
-            int sign = (coeff < 0) ? 1 : 0; 
+            int sign = (coeff < 0) ? 1 : 0;
             int size = 0;
             // VLI encoding for AC coefficients
             int orig_coeff = coeff;
@@ -265,11 +266,7 @@ int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, 
                 stream->writeBits(orig_coeff & ((1 << size) - 1), size); // Write the remaining bits
             }
         }
-        // Check for EOB after encoding each coefficient
-        if (i == FJPEG_BLOCK_SIZE - 1 || (run_length >= 15 && coeff == 0)) {
-            stream->writeBits(context->fjpeg_huffman_luma_ac[0x00].code, context->fjpeg_huffman_luma_ac[0x00].len); // EOB
-            break;
-        }
+
     }
 
     return last_dc_coeff;
@@ -335,14 +332,14 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
 
     for (int i = 0; i < context->channels; i++) {
         stream->writeBits(i + 1, 8);
-        stream->writeBits(i == 0 ? 0x22 : 0x11, 8); // Sampling factors 4:2:0
+        stream->writeBits(i == 0 ? 0x11 : 0x11, 8); // Sampling factors 4:2:0
         stream->writeBits(i==0?0:1, 8); // Quant table
     }
 
 
     // DHT
     stream->writeBits(0xFFC4, 16); // Huffman tables
-    stream->writeBits(31, 16); // Length
+    stream->writeBits(31+179, 16); // Length
     stream->writeBits(0, 4); // DC
     stream->writeBits(0, 4); // Table ID
 
@@ -354,10 +351,10 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
         stream->writeBits(context->fjpeg_short_huffman_luma_dc.val[i], 8);
     }
 
-    stream->writeBits(0xFFC4, 16); // Huffman tables
-    stream->writeBits(181, 16); // Length
+    //stream->writeBits(0xFFC4, 16); // Huffman tables
+    //stream->writeBits(181, 16); // Length
     stream->writeBits(1, 4); // AC
-    stream->writeBits(1, 4); // Table ID
+    stream->writeBits(0, 4); // Table ID
 
     for (int i = 0; i < 16; i++) {
         stream->writeBits(context->fjpeg_short_huffman_luma_ac.bits[i], 8);
@@ -382,7 +379,7 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
             stream->writeBits(context->fjpeg_short_huffman_chroma_dc.val[i], 8);
         }
 
-        stream->writeBits(0x11, 4); // AC
+        stream->writeBits(1, 4); // AC
         stream->writeBits(1, 4); // Table ID
 
         for (int i = 0; i < 16; i++) {
@@ -512,6 +509,26 @@ int main(void) {
 
     FILE *fp = fopen("test.jpg", "wb");
     fjpeg_bitstream* stream = new fjpeg_bitstream(fp);
+
+    //fjpeg_pixel_t cur_block[64];
+    //fjpeg_coeff_t dct_block[64];
+    fjpeg_pixel_t cur_block2[64] = {
+        52, 55, 61, 66, 70, 61, 64, 73,
+        63, 59, 55, 90, 109, 85, 69, 72,
+        62, 59, 68, 113, 144, 104, 66, 73,
+        63, 58, 71, 122, 154, 106, 70, 69,
+        67, 61, 68, 104, 126, 88, 68, 70,
+        79, 65, 60, 70, 77, 68, 58, 75,
+        85, 71, 64, 59, 55, 61, 65, 83,
+        87, 79, 69, 68, 65, 76, 78, 94
+    };
+    
+    fjpeg_dct8x8(cur_block2, dct_block);
+    for(int i = 0; i < 64; i++) {
+        printf("%.2f ", dct_block[i]);
+        if((i+1)%8 == 0) printf("\r\n");
+    }
+
 
     fjpeg_generate_header(stream, context);
 
