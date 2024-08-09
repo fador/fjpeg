@@ -229,8 +229,8 @@ int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, 
         stream->writeBits(context->fjpeg_huffman_luma_ac[0x00].code, context->fjpeg_huffman_luma_ac[0x00].len); // EOB
         return last_dc_coeff;
     }
-
-    for (int i = 1; i < FJPEG_BLOCK_SIZE*FJPEG_BLOCK_SIZE; i++) {
+    int i;
+    for (i = 1; i < FJPEG_BLOCK_SIZE*FJPEG_BLOCK_SIZE; i++) {
         
         int run_length = 0;
         coeff = (int)(block[i]+0.5f);
@@ -283,8 +283,11 @@ int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, 
             stream->writeBits(coeff, size); // Write the remaining bits
         }
     }
-    printf("EOB\r\n");
-    stream->writeBits(context->fjpeg_huffman_luma_ac[0x00].code, context->fjpeg_huffman_luma_ac[0x00].len); // EOB
+    if(i < FJPEG_BLOCK_SIZE*FJPEG_BLOCK_SIZE) {
+        // EOB
+        printf("EOB\r\n");
+        stream->writeBits(context->fjpeg_huffman_luma_ac[0x00].code, context->fjpeg_huffman_luma_ac[0x00].len); // EOB
+    }
 
     return last_dc_coeff;
 }
@@ -474,7 +477,7 @@ int main(void) {
     
     fjpeg_context* context = new fjpeg_context();
 
-    //context->setQuality(50);
+    context->setQuality(1);
 
     context->readInput("G:\\WORK\\sequences\\KristenAndSara_1280x720_60.yuv", 1280, 720);
 
