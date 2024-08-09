@@ -248,8 +248,8 @@ typedef struct fjpeg_context {
         this->quality = quality;
 
         for (int i = 0; i < 64; i++) {
-            int scaled_value_y = ((int32_t)fjpeg_default_luma_quant_table[i] * quality + FJPEG_Q_FACTOR_SCALE / 2) / FJPEG_Q_FACTOR_SCALE;
-            int scaled_value_u = ((int32_t)fjpeg_default_chroma_quant_table[i] * quality + FJPEG_Q_FACTOR_SCALE / 2) / FJPEG_Q_FACTOR_SCALE;
+            int scaled_value_y = ((int32_t)fjpeg_default_luma_quant_table[i] * (100-quality) + FJPEG_Q_FACTOR_SCALE / 2) / FJPEG_Q_FACTOR_SCALE;
+            int scaled_value_u = ((int32_t)fjpeg_default_chroma_quant_table[i] * (100-quality) + FJPEG_Q_FACTOR_SCALE / 2) / FJPEG_Q_FACTOR_SCALE;
             
             fjpeg_luminance_quantization_table[i] = FJPEG_CLAMP(scaled_value_y, 1, 255);
             fjpeg_chrominance_quantization_table[i] = FJPEG_CLAMP(scaled_value_u, 1, 255);
