@@ -37,7 +37,7 @@ typedef struct fjpeg_bitstream {
                 }
                 offset -= 8;
             }
-            current &= (FJPEG_UINT32_MAX >> 32-offset);
+            current &= (FJPEG_UINT32_MAX >> (32-offset));
         }
         // Write the remaining bits
         current <<= bits;
@@ -56,7 +56,7 @@ typedef struct fjpeg_bitstream {
                 }
                 offset -= 8;
             }
-            current &= ((~0) >> 32-offset);
+            current &= ((~0) >> (32-offset));
         }
         fwrite(buffer.data(), 1, buffer.size(), fp);
         buffer.clear();
@@ -352,7 +352,7 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
 
     for (int i = 0; i < context->channels; i++) {
         stream->writeBits(i + 1, 8);
-        stream->writeBits(i == 0 ? 0x11 : 0x11, 8); // Sampling factors 4:2:0
+        stream->writeBits(context->channels == 1?0x11:(i == 0 ? 0x22 : 0x11), 8); // Sampling factors 4:2:0
         stream->writeBits(i==0?0:1, 8); // Quant table
     }
 
@@ -443,8 +443,8 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
     int last_dc_coeff[3] = {0, 0, 0};
     fjpeg_coeff_t dct_block[64];
     stream->avoidFF = true;
-    for(int y = 0; y < 720; y+=8) {
-        for(int x = 0; x < 1280; x+=8) {
+    for(int y = 0; y < context->height; y+=8) {
+        for(int x = 0; x < context->width; x+=8) {
             printf("Encoding block %d %d\n", x, y);
             fjpeg_extract_coeff_8x8(context, dct_block, x, y, 0);
             // Print out the block
@@ -454,7 +454,7 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
             }
             last_dc_coeff[0] = fjpeg_entropy_encode_block(stream, context, dct_block, 0, last_dc_coeff[0]);
         }
-    }    
+    }
     stream->avoidFF = false;
 
 
@@ -477,7 +477,7 @@ int main(void) {
     
     fjpeg_context* context = new fjpeg_context();
 
-    context->setQuality(1);
+    context->setQuality(50);
 
     context->readInput("G:\\WORK\\sequences\\KristenAndSara_1280x720_60.yuv", 1280, 720);
 
@@ -490,8 +490,8 @@ int main(void) {
 
     fjpeg_pixel_t* image = new fjpeg_pixel_t[1280*720];
 
-    for(int y = 0; y < 720; y+=8) {
-        for(int x = 0; x < 1280; x+=8) {
+    for(int y = 0; y < context->height; y+=8) {
+        for(int x = 0; x < context->width; x+=8) {
             fjpeg_extract_8x8(context, cur_block, x, y, 0);
             fjpeg_dct8x8(cur_block, dct_block);
             fjpeg_quant8x8(context, dct_block,dct_block2, 0);
@@ -504,6 +504,43 @@ int main(void) {
             for (int j = 0; j < 8; j++) {
                 for (int i = 0; i < 8; i++) {
                     image[(y + j) * context->width + (x + i)] = cur_block[j * 8 + i];
+                }
+            }
+        }
+    }
+
+    if(context->channels == 3) {
+        for(int y = 0; y < context->height/2; y+=8) {
+            for(int x = 0; x < context->width/2; x+=8) {
+                fjpeg_extract_8x8(context, cur_block, x, y, 1);
+                fjpeg_dct8x8(cur_block, dct_block);
+                fjpeg_quant8x8(context, dct_block,dct_block2, 1);
+                fjpeg_zigzag8x8(dct_block2, dct_block);
+                fjpeg_store_coeff_8x8(context, dct_block, x, y, 1);
+
+                fjpeg_extract_8x8(context, cur_block, x, y, 2);
+                fjpeg_dct8x8(cur_block, dct_block);
+                fjpeg_quant8x8(context, dct_block,dct_block2, 1);
+                fjpeg_zigzag8x8(dct_block2, dct_block);
+                fjpeg_store_coeff_8x8(context, dct_block, x, y, 2);
+            }
+        }
+
+        for(int y = 0; y < 720; y+=8) {
+            for(int x = 0; x < 1280; x+=8) {
+                fjpeg_extract_8x8(context, cur_block, x, y, 2);
+                fjpeg_dct8x8(cur_block, dct_block);
+                fjpeg_quant8x8(context, dct_block,dct_block2, 2);
+                fjpeg_zigzag8x8(dct_block2, dct_block);
+                fjpeg_store_coeff_8x8(context, dct_block, x, y, 2);
+
+                fjpeg_izigzag8x8(dct_block, dct_block2);
+                fjpeg_dequant8x8(context, dct_block2, dct_block, 2);
+                fjpeg_idct8x8(dct_block, cur_block);
+                for (int j = 0; j < 8; j++) {
+                    for (int i = 0; i < 8; i++) {
+                        image[(y + j) * context->width + (x + i)] = cur_block[j * 8 + i];
+                    }
                 }
             }
         }
