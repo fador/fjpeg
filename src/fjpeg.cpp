@@ -178,96 +178,113 @@ bool fjpeg_store_coeff_8x8(fjpeg_context* context, fjpeg_coeff_t* input, int x, 
     return true;
 }
 
-static void category_encode(int *code, int *size)
-{
-    unsigned absc = abs(*code);
-    unsigned mask = (1 << 15);
-    int i    = 15;
-    if (absc == 0) { *size = 0; return; }
-    while (i && !(absc & mask)) { mask >>= 1; i--; }
-    *size = i + 1;
-    if (*code < 0) *code = (1 << *size) - absc - 1;
-}
-
 // Function to encode a single block of quantized DCT coefficients
 int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, fjpeg_coeff_t* block, int channel, int last_dc) {
     int last_dc_coeff = last_dc;  // For DC coefficient prediction
 
-    for (int i = 0; i < FJPEG_BLOCK_SIZE; i++) {
-        int coeff = (int)(block[i]+0.5f); // Quantized DCT coefficients
+    // Check for last coeff
+    int last_coeff = 0;
+    for(int i = FJPEG_BLOCK_SIZE*FJPEG_BLOCK_SIZE-1; i >= 0; i--) {
+        if((int)(block[i]+0.5f) != 0) {
+            last_coeff = i;
+            break;
+        }        
+    }
+
+    // Code DC coefficient
+    int coeff = (int)(block[0]+0.5f); // Quantized DCT coefficients
+    printf("Coeff %d\r\n", coeff);
+    int diff = coeff - last_dc_coeff;
+    last_dc_coeff = coeff;
+    int orig_diff = diff;
+    int sign = (diff < 0) ? 1 : 0;
+    int size = 0;
+    // VLI encoding for DC coefficients
+    if (sign) diff = -diff;
+    while (diff != 0) {
+        diff >>= 1;
+        size++;
+    }
+    // Check for overflow
+    if (size > 11) {
+        // Handle error or clamp the size
+        fprintf(stderr, "Error: DC coefficient size overflow 1\n");
+        exit(1);
+    }
+
+    printf("Writing DC coeff %d size %d huff len %d %d\n", orig_diff, size, context->fjpeg_huffman_luma_dc[size].len, context->fjpeg_huffman_luma_dc[size].code);
+    stream->writeBits(context->fjpeg_huffman_luma_dc[size].code, context->fjpeg_huffman_luma_dc[size].len); // Write size code
+    if(size != 0) {
+        diff = orig_diff;
+        if(sign) {
+            diff = (1 << size) + diff - 1;
+        }
+        //stream->writeBits(sign, 1); // Write sign bit
+        printf("Writing DC coeff %d size %d\n", diff, size);
+        stream->writeBits(diff, size); // Write diff value
+    }
+
+    if(last_coeff == 0) {
+        // All zero block
+        stream->writeBits(context->fjpeg_huffman_luma_ac[0x00].code, context->fjpeg_huffman_luma_ac[0x00].len); // EOB
+        return last_dc_coeff;
+    }
+
+    for (int i = 1; i < FJPEG_BLOCK_SIZE*FJPEG_BLOCK_SIZE; i++) {
+        
         int run_length = 0;
+        coeff = (int)(block[i]+0.5f);
 
         // Run-length coding for AC coefficients
-        while (coeff == 0 && i < FJPEG_BLOCK_SIZE - 1) {
+        while (coeff == 0 && i < FJPEG_BLOCK_SIZE*FJPEG_BLOCK_SIZE - 1) {
             run_length++;
             i++;
-            coeff = (int)(block[i]+0.5f);            
+            coeff = (int)(block[i]+0.5f);
+            if(i > last_coeff) {
+                break;
+            }
+            if(run_length == 16) {
+                // ZRL
+                printf("ZRL\r\n");
+                stream->writeBits(context->fjpeg_huffman_luma_ac[0xF0].code, context->fjpeg_huffman_luma_ac[0xF0].len); // ZRL
+                run_length = 0;
+            }
         }
+        printf("Run length %d\r\n", run_length);
         // Check for EOB after encoding each coefficient
-        if (i == FJPEG_BLOCK_SIZE - 1 || (run_length >= 15 && coeff == 0)) {
-            printf("EOB\r\n");
-            stream->writeBits(context->fjpeg_huffman_luma_ac[0x00].code, context->fjpeg_huffman_luma_ac[0x00].len); // EOB
+        if (i > last_coeff || coeff == 0) {
             break;
         }
 
-        // Encode the DC coefficient
-        if (i == 0) {
-            printf("Coeff %d\r\n", coeff);
-            int diff = coeff - last_dc_coeff;
-            last_dc_coeff = coeff;
-            int orig_diff = diff;
-            int sign = (diff < 0) ? 1 : 0;
-            int size = 0;
-            // VLI encoding for DC coefficients
-            if (sign) diff = -diff;            
-            while (diff != 0) {
-                diff >>= 1;
-                size++;                
-            }
-            // Check for overflow
-            if (size > 11) {
-                // Handle error or clamp the size
-                fprintf(stderr, "Error: DC coefficient size overflow 1\n");
-                exit(1);
-            }
-
-            printf("Writing DC coeff %d size %d huff len %d %d\n", orig_diff, size, context->fjpeg_huffman_luma_dc[size].len, context->fjpeg_huffman_luma_dc[size].code);
-            stream->writeBits(context->fjpeg_huffman_luma_dc[size].code, context->fjpeg_huffman_luma_dc[size].len); // Write size code
-            if(size != 0) {
-                diff = orig_diff;
-                if(sign) {
-                    diff = (1 << size) + diff - 1;
-                }
-                //stream->writeBits(sign, 1); // Write sign bit
-                printf("Writing DC coeff %d size %d\n", diff, size);
-                stream->writeBits(diff, size); // Write diff value
-            }            
-        }       // Encode the AC coefficient
-        else {
-            int sign = (coeff < 0) ? 1 : 0;
-            int size = 0;
-            // VLI encoding for AC coefficients
-            int orig_coeff = coeff;
-            if(sign) coeff = -coeff;
-            while (coeff != 0) {
-                coeff >>= 1;
-                size++;                
-            }
-             // Check for overflow
-            if (size > 10) {
-                // Handle error or clamp the size
-                fprintf(stderr, "Error: DC coefficient size overflow 2\n");
-                exit(1);
-            }
-            stream->writeBits(context->fjpeg_huffman_luma_ac[(run_length << 4) + size].code,
-                             context->fjpeg_huffman_luma_ac[(run_length << 4) + size].len); // Write run-length/size code
-            if (size > 0) {
-                //stream->writeBits(sign, 1);  // Write the sign bit first
-                stream->writeBits(orig_coeff & ((1 << size) - 1), size); // Write the remaining bits
-            }
+         // Encode the AC coefficient
+        int sign = (coeff < 0) ? 1 : 0;
+        int size = 0;
+        // VLI encoding for AC coefficients
+        int orig_coeff = coeff;
+        if(sign) coeff = -coeff;
+        while (coeff != 0) {
+            coeff >>= 1;
+            size++;                
         }
-
+            // Check for overflow
+        if (size > 10) {
+            // Handle error or clamp the size
+            fprintf(stderr, "Error: DC coefficient size overflow 2\n");
+            exit(1);
+        }
+        printf("Writing AC coeff %d size %d huff len %d %d\n", orig_coeff, size, context->fjpeg_huffman_luma_ac[(run_length << 4) + size].len, context->fjpeg_huffman_luma_ac[(run_length << 4) + size].code);
+        stream->writeBits(context->fjpeg_huffman_luma_ac[(run_length << 4) + size].code,
+                            context->fjpeg_huffman_luma_ac[(run_length << 4) + size].len); // Write run-length/size code
+        if (size > 0) {
+            coeff = orig_coeff;
+            if(sign) {
+                coeff = (1 << size) + coeff - 1;
+            }
+            stream->writeBits(coeff, size); // Write the remaining bits
+        }
     }
+    printf("EOB\r\n");
+    stream->writeBits(context->fjpeg_huffman_luma_ac[0x00].code, context->fjpeg_huffman_luma_ac[0x00].len); // EOB
 
     return last_dc_coeff;
 }
