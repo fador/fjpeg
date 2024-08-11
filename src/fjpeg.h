@@ -221,6 +221,7 @@ typedef struct fjpeg_context {
         memcpy(fjpeg_chrominance_quantization_table, fjpeg_default_chroma_quant_table, 64);
 
         fjpeg_generate_tables(fjpeg_huffman_luma_dc, &fjpeg_default_huffman_luma_dc);
+        #ifdef FJPEG_DEBUG_HUFFMAN
         for(int i = 0; i < 256; i++) {
             if(fjpeg_huffman_luma_dc[i].len == 0) continue;
             printf("%i\t%i\t", i, fjpeg_huffman_luma_dc[i].len);
@@ -229,6 +230,7 @@ typedef struct fjpeg_context {
             }
             printf("\r\n");
         }
+        #endif
 
         fjpeg_generate_tables(fjpeg_huffman_luma_ac, &fjpeg_default_huffman_luma_ac);
         fjpeg_generate_tables(fjpeg_huffman_chroma_dc, &fjpeg_default_huffman_chroma_dc);

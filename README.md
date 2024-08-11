@@ -1,4 +1,4 @@
-**FJPEG - A JPEG Encoder in C++**
+**FJPEG**
 
 **Overview**
 
@@ -23,13 +23,13 @@ FJPEG is a compact JPEG encoder implementation in C++, designed for educational 
 
 2. **Run:**
    ```bash
-   ./fjpeg
+   ./fjpeg -i input_1280x720.yuv -r 1280x720 -q 70 -o test.jpg
    ```
-   This will generate a "test.jpg" file in the current directory based on a default YUV input.
+   This will generate a "test.jpg" file in the current directory based on the YUV input with quality 70.
 
 **Understanding the Code**
 
-The code is well-commented, making it suitable for learning about JPEG compression techniques. Key sections include:
+The code is suitable for learning about JPEG compression techniques. Key sections include:
 
 * **DCT and IDCT:** Functions for performing the forward and inverse Discrete Cosine Transforms.
 * **Quantization and Dequantization:** Functions to apply quantization and dequantization based on quality settings.

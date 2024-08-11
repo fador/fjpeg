@@ -5,6 +5,7 @@
 #include <cctype>
 #include <vector>
 #include <cassert>
+#include <string>
 #ifdef _WIN32
 #include <winsock2.h>
 #pragma comment(lib, "ws2_32.lib")
@@ -417,8 +418,9 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
 
             for(int v = 0; v < max_uv; v++) {
                 for(int u = 0; u < max_uv; u++) {
-
+                    #ifdef FJPEG_DEBUG_BLOCK
                     printf("Encoding block %dx%d + %dx%d\n", x, y, u*8, v*8);
+                    #endif
                     fjpeg_extract_coeff_8x8(context, dct_block, x+u*8, y+v*8, 0);
                     // Print out the block
                     #ifdef FJPEG_DEBUG_BLOCK
@@ -456,15 +458,110 @@ static const char *fjpeg_version() {
 }
 
 
+void print_usage() {
+    printf("Usage: fjpeg [options]\r\n");
+    printf("Example: fjpeg -i input.yuv -q 50 -r 1280x720 -o output.jpg\r\n");
+    printf("Options:\r\n");
+    printf("  -i <input_filename>  input YUV file\r\n");
+    printf("  -q <quality>  Set quality factor (1-100)\r\n");
+    printf("  -r <width>x<height>  Set resolution\r\n");
+    printf("  -o <output_filename>  Output JPEG file\r\n");
+    printf("  -h  Show help\r\n");
+}
 
-int main(void) {
+int main(int argc, char** argv) {
     printf("FJPEG %s\n", fjpeg_version());
     
+    std::string input_filename;
+    std::string output_filename;
+    int quality = 50;
+    int width = 0;
+    int height = 0;
+
+    // Parse filename, quality and resolution
+    for(int i = 1; i < argc; i++) {
+        if(strcmp(argv[i], "-q") == 0) {
+            if(i+1 < argc) {
+                quality = atoi(argv[i+1]);
+                if(quality < 1 || quality > 100) {
+                    fprintf(stderr, "Error: Invalid quality value\n");
+                    return 1;
+                }
+            } else {
+                fprintf(stderr, "Error: Missing quality value\n");
+                return 1;
+            }
+            i++;
+        }
+        else if(strcmp(argv[i], "-i") == 0) {
+            if(i+1 < argc) {
+                if(strlen(argv[i+1]) > 255) {
+                    fprintf(stderr, "Error: Input filename too long\n");
+                    return 1;
+                }
+                input_filename = argv[i+1];
+            } else {
+                fprintf(stderr, "Error: Missing input filename\n");
+                return 1;
+            }
+            i++;
+        }
+        else if(strcmp(argv[i], "-r") == 0) {
+            if(i+1 < argc) {
+                if(sscanf(argv[i+1], "%dx%d", &width, &height) != 2) {
+                    fprintf(stderr, "Error: Invalid resolution\n");
+                    return 1;
+                }
+                if(width < 1 || height < 1) {
+                    fprintf(stderr, "Error: Invalid resolution\n");
+                    return 1;
+                }
+            } else {
+                fprintf(stderr, "Error: Missing resolution\n");
+                return 1;
+            }
+            i++;
+        }
+        else if(strcmp(argv[i], "-o") == 0) {
+            if(i+1 < argc) {
+                if(strlen(argv[i+1]) > 255) {
+                    fprintf(stderr, "Error: Output filename too long\n");
+                    return 1;
+                }
+                output_filename = argv[i+1];
+            } else {
+                fprintf(stderr, "Error: Missing output filename\n");
+                return 1;
+            }
+            i++;
+        }
+        else if(strcmp(argv[i], "-h") == 0) {
+            print_usage();
+            return 0;
+        }
+    }
+
+    if(input_filename.empty()) {
+        fprintf(stderr, "Error: Missing input filename\n");
+        print_usage();
+        return 1;
+    }
+    if(output_filename.empty()) {
+        fprintf(stderr, "Error: Missing output filename\n");
+        print_usage();
+        return 1;
+    }
+    if(width == 0 || height == 0) {
+        fprintf(stderr, "Error: Missing resolution\n");
+        print_usage();
+        return 1;
+    }
+
     fjpeg_context* context = new fjpeg_context();
 
-    context->setQuality(50);
+    context->setQuality(quality);
 
-    context->readInput("G:\\WORK\\sequences\\KristenAndSara_1280x720_60.yuv", 1280, 720);
+    context->readInput(input_filename.c_str(), width, height);
 
     context->channels = 3;
 
@@ -558,12 +655,22 @@ int main(void) {
     }
 #endif
 
-    FILE *fp = fopen("test.jpg", "wb");
+    FILE *fp = fopen(output_filename.c_str(), "wb");
+    if(!fp) {
+        fprintf(stderr, "Error: Unable to open output file\n");
+        return 1;
+    }
     fjpeg_bitstream* stream = new fjpeg_bitstream(fp);
 
     fjpeg_generate_header(stream, context);
 
+    int file_size = ftell(fp);
+
     fclose(fp);
+
+    printf("Input size: %d bytes\r\n", context->width*context->height*3/2);
+    printf("Output size: %d bytes\r\n", file_size);
+
     delete stream;
     delete [] image;
 
