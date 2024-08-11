@@ -93,10 +93,11 @@ fjpeg_coeff_t* fjpeg_izigzag8x8(fjpeg_coeff_t* block, fjpeg_coeff_t* out) {
 fjpeg_pixel_t* fjpeg_extract_8x8(fjpeg_context* context, fjpeg_pixel_t* output, int x, int y, int channel) {    
 
     fjpeg_pixel_t* image = channel==0?context->fjpeg_y:channel==1?context->fjpeg_cb:context->fjpeg_cr;
+    const int input_width = channel==0?context->width:context->width/2;
 
     for (int j = 0; j < 8; j++) {
         for (int i = 0; i < 8; i++) {
-            output[j * 8 + i] = image[(y + j) * context->width  + (x + i)];
+            output[j * 8 + i] = image[(y + j) * input_width  + (x + i)];
         }
     }
     return output;
@@ -105,10 +106,11 @@ fjpeg_pixel_t* fjpeg_extract_8x8(fjpeg_context* context, fjpeg_pixel_t* output, 
 fjpeg_coeff_t* fjpeg_extract_coeff_8x8(fjpeg_context* context, fjpeg_coeff_t* output, int x, int y, int channel) {    
 
     fjpeg_coeff_t* image = channel==0?context->fjpeg_ydct:channel==1?context->fjpeg_cbdct:context->fjpeg_crdct;
+    const int input_width = channel==0?context->width:context->width/2;
 
     for (int j = 0; j < 8; j++) {
         for (int i = 0; i < 8; i++) {
-            output[j * 8 + i] = image[(y + j) * context->width  + (x + i)];
+            output[j * 8 + i] = image[(y + j) * input_width  + (x + i)];
         }
     }
     return output;
@@ -117,10 +119,11 @@ fjpeg_coeff_t* fjpeg_extract_coeff_8x8(fjpeg_context* context, fjpeg_coeff_t* ou
 bool fjpeg_store_coeff_8x8(fjpeg_context* context, fjpeg_coeff_t* input, int x, int y, int channel) {
 
     fjpeg_coeff_t* image = channel==0?context->fjpeg_ydct:channel==1?context->fjpeg_cbdct:context->fjpeg_crdct;
+    const int input_width = channel==0?context->width:context->width/2;
 
     for (int j = 0; j < 8; j++) {
         for (int i = 0; i < 8; i++) {
-            image[(y + j) * context->width + (x + i)] = input[j * 8 + i];
+            image[(y + j) * input_width + (x + i)] = input[j * 8 + i];
         }
     }
     return true;
@@ -129,6 +132,9 @@ bool fjpeg_store_coeff_8x8(fjpeg_context* context, fjpeg_coeff_t* input, int x, 
 // Function to encode a single block of quantized DCT coefficients
 int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, fjpeg_coeff_t* block, int channel, int last_dc) {
     int last_dc_coeff = last_dc;  // For DC coefficient prediction
+
+    fjpeg_huffman_table_t* huff_dc = channel==0?context->fjpeg_huffman_luma_dc:context->fjpeg_huffman_chroma_dc;
+    fjpeg_huffman_table_t* huff_ac = channel==0?context->fjpeg_huffman_luma_ac:context->fjpeg_huffman_chroma_ac;
 
     // Check for last coeff
     int last_coeff = 0;
@@ -141,7 +147,9 @@ int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, 
 
     // Code DC coefficient
     int coeff = (int)(block[0]+0.5f); // Quantized DCT coefficients
+    #ifdef FJPEG_DEBUG_COEFF
     printf("Coeff %d\r\n", coeff);
+    #endif
     int diff = coeff - last_dc_coeff;
     last_dc_coeff = coeff;
     int orig_diff = diff;
@@ -159,22 +167,24 @@ int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, 
         fprintf(stderr, "Error: DC coefficient size overflow 1\n");
         exit(1);
     }
-
-    printf("Writing DC coeff %d size %d huff len %d %d\n", orig_diff, size, context->fjpeg_huffman_luma_dc[size].len, context->fjpeg_huffman_luma_dc[size].code);
-    stream->writeBits(context->fjpeg_huffman_luma_dc[size].code, context->fjpeg_huffman_luma_dc[size].len); // Write size code
+    #ifdef FJPEG_DEBUG_COEFF
+    printf("Writing DC coeff %d size %d huff len %d %d\n", orig_diff, size, huff_dc[size].len, huff_dc[size].code);
+    #endif
+    stream->writeBits(huff_dc[size].code, huff_dc[size].len); // Write size code
     if(size != 0) {
         diff = orig_diff;
         if(sign) {
             diff = (1 << size) + diff - 1;
         }
-        //stream->writeBits(sign, 1); // Write sign bit
+        #ifdef FJPEG_DEBUG_COEFF
         printf("Writing DC coeff %d size %d\n", diff, size);
+        #endif
         stream->writeBits(diff, size); // Write diff value
     }
 
     if(last_coeff == 0) {
         // All zero block
-        stream->writeBits(context->fjpeg_huffman_luma_ac[0x00].code, context->fjpeg_huffman_luma_ac[0x00].len); // EOB
+        stream->writeBits(huff_ac[0x00].code, huff_ac[0x00].len); // EOB
         return last_dc_coeff;
     }
     int i;
@@ -193,12 +203,16 @@ int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, 
             }
             if(run_length == 16) {
                 // ZRL
+                #ifdef FJPEG_DEBUG_COEFF
                 printf("ZRL\r\n");
-                stream->writeBits(context->fjpeg_huffman_luma_ac[0xF0].code, context->fjpeg_huffman_luma_ac[0xF0].len); // ZRL
+                #endif
+                stream->writeBits(huff_ac[0xF0].code, huff_ac[0xF0].len); // ZRL
                 run_length = 0;
             }
         }
+        #ifdef FJPEG_DEBUG_COEFF
         printf("Run length %d\r\n", run_length);
+        #endif
         // Check for EOB after encoding each coefficient
         if (i > last_coeff || coeff == 0) {
             break;
@@ -220,9 +234,11 @@ int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, 
             fprintf(stderr, "Error: DC coefficient size overflow 2\n");
             exit(1);
         }
-        printf("Writing AC coeff %d size %d huff len %d %d\n", orig_coeff, size, context->fjpeg_huffman_luma_ac[(run_length << 4) + size].len, context->fjpeg_huffman_luma_ac[(run_length << 4) + size].code);
-        stream->writeBits(context->fjpeg_huffman_luma_ac[(run_length << 4) + size].code,
-                            context->fjpeg_huffman_luma_ac[(run_length << 4) + size].len); // Write run-length/size code
+        #ifdef FJPEG_DEBUG_COEFF
+        printf("Writing AC coeff %d size %d huff len %d %d\n", orig_coeff, size, huff_ac[(run_length << 4) + size].len, huff_ac[(run_length << 4) + size].code);
+        #endif
+        stream->writeBits(huff_ac[(run_length << 4) + size].code,
+                            huff_ac[(run_length << 4) + size].len); // Write run-length/size code
         if (size > 0) {
             coeff = orig_coeff;
             if(sign) {
@@ -233,8 +249,10 @@ int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, 
     }
     if(i < FJPEG_BLOCK_SIZE*FJPEG_BLOCK_SIZE) {
         // EOB
+        #ifdef FJPEG_DEBUG_COEFF
         printf("EOB\r\n");
-        stream->writeBits(context->fjpeg_huffman_luma_ac[0x00].code, context->fjpeg_huffman_luma_ac[0x00].len); // EOB
+        #endif
+        stream->writeBits(huff_ac[0x00].code, huff_ac[0x00].len); // EOB
     }
 
     return last_dc_coeff;
@@ -278,8 +296,8 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
         // chroma quant
         stream->writeBits(0xFFDB, 16);
         stream->writeBits(67, 16);
-        stream->writeBits(1, 4);
         stream->writeBits(0, 4);
+        stream->writeBits(1, 4);
 
         for(int i = 0; i < 64; i++) {
             tmp[fjpeg_zigzag_8x8[i]] = context->fjpeg_chrominance_quantization_table[i];
@@ -391,16 +409,35 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
     int last_dc_coeff[3] = {0, 0, 0};
     fjpeg_coeff_t dct_block[64];
     stream->avoidFF = true;
-    for(int y = 0; y < context->height; y+=8) {
-        for(int x = 0; x < context->width; x+=8) {
-            printf("Encoding block %d %d\n", x, y);
-            fjpeg_extract_coeff_8x8(context, dct_block, x, y, 0);
-            // Print out the block
-            for(int i = 0; i < 64; i++) {
-                printf("%3d ", (int16_t)(dct_block[i]+0.5f));
-                if((i+1)%8 == 0) printf("\r\n");
+    const int inc_xy = context->channels==1?8:16;
+    const int max_uv = context->channels==1?1:2;
+    
+    for(int y = 0; y < context->height; y+=inc_xy) {
+        for(int x = 0; x < context->width; x+=inc_xy) {
+
+            for(int v = 0; v < max_uv; v++) {
+                for(int u = 0; u < max_uv; u++) {
+
+                    printf("Encoding block %dx%d + %dx%d\n", x, y, u*8, v*8);
+                    fjpeg_extract_coeff_8x8(context, dct_block, x+u*8, y+v*8, 0);
+                    // Print out the block
+                    #ifdef FJPEG_DEBUG_BLOCK
+                    for(int i = 0; i < 64; i++) {
+                        printf("%3d ", (int16_t)(dct_block[i]+0.5f));
+                        if((i+1)%8 == 0) printf("\r\n");
+                    }
+                    #endif                    
+                    last_dc_coeff[0] = fjpeg_entropy_encode_block(stream, context, dct_block, 0, last_dc_coeff[0]);
+                }
             }
-            last_dc_coeff[0] = fjpeg_entropy_encode_block(stream, context, dct_block, 0, last_dc_coeff[0]);
+
+            if(context->channels==3) {
+                fjpeg_extract_coeff_8x8(context, dct_block, x>>1, y>>1, 1);
+                last_dc_coeff[1] = fjpeg_entropy_encode_block(stream, context, dct_block, 1, last_dc_coeff[1]);
+
+                fjpeg_extract_coeff_8x8(context, dct_block, x>>1, y>>1, 2);
+                last_dc_coeff[2] = fjpeg_entropy_encode_block(stream, context, dct_block, 2, last_dc_coeff[2]);
+            }
         }
     }
     stream->avoidFF = false;
@@ -429,7 +466,7 @@ int main(void) {
 
     context->readInput("G:\\WORK\\sequences\\KristenAndSara_1280x720_60.yuv", 1280, 720);
 
-    context->channels = 1;
+    context->channels = 3;
 
     fjpeg_pixel_t cur_block[64];
 
@@ -465,31 +502,16 @@ int main(void) {
                 fjpeg_quant8x8(context, dct_block,dct_block2, 1);
                 fjpeg_zigzag8x8(dct_block2, dct_block);
                 fjpeg_store_coeff_8x8(context, dct_block, x, y, 1);
-
-                fjpeg_extract_8x8(context, cur_block, x, y, 2);
-                fjpeg_dct8x8(cur_block, dct_block);
-                fjpeg_quant8x8(context, dct_block,dct_block2, 1);
-                fjpeg_zigzag8x8(dct_block2, dct_block);
-                fjpeg_store_coeff_8x8(context, dct_block, x, y, 2);
             }
         }
 
-        for(int y = 0; y < 720; y+=8) {
-            for(int x = 0; x < 1280; x+=8) {
+        for(int y = 0; y < context->height/2; y+=8) {
+            for(int x = 0; x < context->width/2; x+=8) {
                 fjpeg_extract_8x8(context, cur_block, x, y, 2);
                 fjpeg_dct8x8(cur_block, dct_block);
                 fjpeg_quant8x8(context, dct_block,dct_block2, 2);
                 fjpeg_zigzag8x8(dct_block2, dct_block);
                 fjpeg_store_coeff_8x8(context, dct_block, x, y, 2);
-
-                fjpeg_izigzag8x8(dct_block, dct_block2);
-                fjpeg_dequant8x8(context, dct_block2, dct_block, 2);
-                fjpeg_idct8x8(dct_block, cur_block);
-                for (int j = 0; j < 8; j++) {
-                    for (int i = 0; i < 8; i++) {
-                        image[(y + j) * context->width + (x + i)] = cur_block[j * 8 + i];
-                    }
-                }
             }
         }
     }
