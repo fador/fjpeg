@@ -515,7 +515,7 @@ int main(void) {
             }
         }
     }
-
+#ifdef FJPEG_DEBUG_DCT_BLOCK
     FILE* dct_out = fopen("dct.yuv", "wb");
     for(int y = 0; y < 720; y++) {
         for(int x = 0; x < 1280; x++) {
@@ -525,6 +525,7 @@ int main(void) {
     }
     fclose(dct_out);
 
+
     FILE* idct_out = fopen("idct.yuv", "wb");
     for(int y = 0; y < 720; y++) {
         for(int x = 0; x < 1280; x++) {
@@ -533,10 +534,10 @@ int main(void) {
         }
     }
     fclose(idct_out);
+#endif
 
-    FILE *fp = fopen("test.jpg", "wb");
-    fjpeg_bitstream* stream = new fjpeg_bitstream(fp);
 
+#ifdef FJPEG_TEST_DCT
     //fjpeg_pixel_t cur_block[64];
     //fjpeg_coeff_t dct_block[64];
     fjpeg_pixel_t cur_block2[64] = {
@@ -555,7 +556,10 @@ int main(void) {
         printf("%.2f ", dct_block[i]);
         if((i+1)%8 == 0) printf("\r\n");
     }
+#endif
 
+    FILE *fp = fopen("test.jpg", "wb");
+    fjpeg_bitstream* stream = new fjpeg_bitstream(fp);
 
     fjpeg_generate_header(stream, context);
 
