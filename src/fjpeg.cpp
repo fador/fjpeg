@@ -34,6 +34,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <vector>
 #include <cassert>
 #include <string>
+#include <chrono>
 #ifdef _WIN32
 #include <winsock2.h>
 #pragma comment(lib, "ws2_32.lib")
@@ -585,11 +586,21 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Time measurement
+    int64_t time_input_read_ms = 0;
+    int64_t time_dct_quant_ms = 0;
+    int64_t time_header_ms = 0;
+
+
     fjpeg_context* context = new fjpeg_context();
 
     context->setQuality(quality);
 
+    // Calculate time
+    auto start = std::chrono::high_resolution_clock::now();
     context->readInput(input_filename.c_str(), width, height);
+    auto end = std::chrono::high_resolution_clock::now();
+    time_input_read_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
     context->channels = 3;
 
@@ -599,6 +610,8 @@ int main(int argc, char** argv) {
     fjpeg_coeff_t dct_block2[64];
 
     fjpeg_pixel_t* image = new fjpeg_pixel_t[1280*720];
+
+    start = std::chrono::high_resolution_clock::now();
 
     for(int y = 0; y < context->height; y+=8) {
         for(int x = 0; x < context->width; x+=8) {
@@ -640,6 +653,10 @@ int main(int argc, char** argv) {
             }
         }
     }
+
+    end = std::chrono::high_resolution_clock::now();
+    time_dct_quant_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
 #ifdef FJPEG_DEBUG_DCT_BLOCK
     FILE* dct_out = fopen("dct.yuv", "wb");
     for(int y = 0; y < 720; y++) {
@@ -690,12 +707,16 @@ int main(int argc, char** argv) {
     }
     fjpeg_bitstream* stream = new fjpeg_bitstream(fp);
 
+    start = std::chrono::high_resolution_clock::now();
     fjpeg_generate_header(stream, context);
+    end = std::chrono::high_resolution_clock::now();
+    time_header_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
     int file_size = ftell(fp);
 
     fclose(fp);
-
+    
+    printf("Time: Input read %d ms, DCT/Quant %d ms, Header %d ms\r\n", (int)time_input_read_ms, (int)time_dct_quant_ms, (int)time_header_ms);
     printf("Input size: %d bytes\r\n", context->width*context->height*3/2);
     printf("Output size: %d bytes\r\n", file_size);
 
