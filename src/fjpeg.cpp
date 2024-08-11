@@ -13,60 +13,8 @@
 #include "fjpeg.h"
 //#include "fjpeg_tables.h"
 
-// Bitstream handling
-typedef struct fjpeg_bitstream {
-    uint32_t current;
-    int offset;
-    FILE *fp;
-    std::vector<uint8_t> buffer;
-    bool avoidFF;
-
-    fjpeg_bitstream(FILE *fp) : current(0), offset(0), fp(fp), avoidFF(false) {}
-
-    void writeBits(uint32_t input, int bits) {
-        assert(bits > 0 && bits <= 24);
-
-        // Is there space in the current buffer
-        if (offset + bits >= 32) {
-            // Flush the buffer
-            while(offset >= 8) {
-                uint8_t val = (current >> (offset-8)) & 0xff;
-                buffer.push_back(val);
-                if(avoidFF && val == 0xff) {
-                    buffer.push_back(0);
-                }
-                offset -= 8;
-            }
-            current &= (FJPEG_UINT32_MAX >> (32-offset));
-        }
-        // Write the remaining bits
-        current <<= bits;
-        current |= input;
-        offset += bits;
-    }
-
-    void flushToFile() {
-        if (offset > 0) {
-            if(offset&7) current <<= (8-(offset&7));
-            while(offset >= 8) {
-                uint8_t val = (current >> (offset-8)) & 0xff;
-                buffer.push_back(val);
-                if(avoidFF && val == 0xff) {
-                    buffer.push_back(0);
-                }
-                offset -= 8;
-            }
-            current &= ((~0) >> (32-offset));
-        }
-        fwrite(buffer.data(), 1, buffer.size(), fp);
-        buffer.clear();
-    }
-
-    ~fjpeg_bitstream() {
-        flushToFile();
-    }
-} fjpeg_bitstream_t;
-
+//#define FJPEG_DEBUG_BLOCK 1
+//#define FJPEG_DEBUG_COEFF 1
 
 fjpeg_coeff_t* fjpeg_dct8x8(fjpeg_pixel_t* block, fjpeg_coeff_t* out) {
     for (int v = 0; v < FJPEG_BLOCK_SIZE; v++) {
