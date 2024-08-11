@@ -37,6 +37,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #define FJPEG_VERSION "0.1.0"
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846f
+#endif
+
 #define FJPEG_MAX(a, b) ((a) > (b) ? (a) : (b))
 #define FJPEG_MIN(a, b) ((a) < (b) ? (a) : (b))
 
@@ -224,6 +228,17 @@ typedef struct fjpeg_context {
     fjpeg_coeff_t* fjpeg_cbdct;
     fjpeg_coeff_t* fjpeg_crdct;
 
+    float precalc_cos[8][8];
+
+    void fjpeg_precals_cos() {
+        for (int i = 0; i < 8; i++) {
+            for(int j = 0; j < 8; j++) {
+                precalc_cos[i][j] = cosf((2.f * i + 1.f) * j * M_PI / 16.f);
+            }
+        }
+        
+    }
+
     fjpeg_context() {
         input = nullptr;
         output = nullptr;
@@ -266,7 +281,9 @@ typedef struct fjpeg_context {
         memcpy(&fjpeg_short_huffman_chroma_dc, &fjpeg_default_huffman_chroma_dc, sizeof(fjpeg_short_huffman_table_t));
         memcpy(&fjpeg_short_huffman_chroma_ac, &fjpeg_default_huffman_chroma_ac, sizeof(fjpeg_short_huffman_table_t));
         memcpy(&fjpeg_short_huffman_luma_dc, &fjpeg_default_huffman_luma_dc, sizeof(fjpeg_short_huffman_table_t));
-        memcpy(&fjpeg_short_huffman_luma_ac, &fjpeg_default_huffman_luma_ac, sizeof(fjpeg_short_huffman_table_t));        
+        memcpy(&fjpeg_short_huffman_luma_ac, &fjpeg_default_huffman_luma_ac, sizeof(fjpeg_short_huffman_table_t));
+
+        fjpeg_precals_cos();
     }
 
     bool setQuality(int quality) {
@@ -403,6 +420,3 @@ typedef struct fjpeg_bitstream {
 } fjpeg_bitstream_t;
 
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846f
-#endif

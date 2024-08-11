@@ -46,7 +46,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //#define FJPEG_DEBUG_BLOCK 1
 //#define FJPEG_DEBUG_COEFF 1
 
-fjpeg_coeff_t* fjpeg_dct8x8(fjpeg_pixel_t* block, fjpeg_coeff_t* out) {
+
+
+fjpeg_coeff_t* fjpeg_dct8x8(fjpeg_context* context, fjpeg_pixel_t* block, fjpeg_coeff_t* out) {
     for (int v = 0; v < FJPEG_BLOCK_SIZE; v++) {
         for (int u = 0; u < FJPEG_BLOCK_SIZE; u++) {
             float sum = 0.0f;
@@ -54,7 +56,7 @@ fjpeg_coeff_t* fjpeg_dct8x8(fjpeg_pixel_t* block, fjpeg_coeff_t* out) {
             float cv = (v == 0) ? 1.0f / sqrtf(2.f) : 1.0f;
             for (int x = 0; x < FJPEG_BLOCK_SIZE; x++) {
                 for (int y = 0; y < FJPEG_BLOCK_SIZE; y++) {                    
-                    sum += (((float)block[y*FJPEG_BLOCK_SIZE+x])-128.f) * cosf((2.f * x + 1.f) * u * M_PI / 16.f) * cosf((2.f * y + 1.f) * v * M_PI / 16.f);
+                    sum += (((float)block[y*FJPEG_BLOCK_SIZE+x])-128.f) *context->precalc_cos[x][u]  * context->precalc_cos[y][v] ;
                 }
             }
             out[v*FJPEG_BLOCK_SIZE+u] = 0.25f * sum  * cu * cv;  // Apply constant factor
@@ -63,7 +65,7 @@ fjpeg_coeff_t* fjpeg_dct8x8(fjpeg_pixel_t* block, fjpeg_coeff_t* out) {
     return out;
 }
 
-fjpeg_pixel_t* fjpeg_idct8x8(fjpeg_coeff_t* block, fjpeg_pixel_t* out) {
+fjpeg_pixel_t* fjpeg_idct8x8(fjpeg_context* context, fjpeg_coeff_t* block, fjpeg_pixel_t* out) {
     for (int y = 0; y < FJPEG_BLOCK_SIZE; y++) {
         for (int x = 0; x < FJPEG_BLOCK_SIZE; x++) {
             float sum = 0.0f;
@@ -71,7 +73,7 @@ fjpeg_pixel_t* fjpeg_idct8x8(fjpeg_coeff_t* block, fjpeg_pixel_t* out) {
                 for (int u = 0; u < FJPEG_BLOCK_SIZE; u++) {
                     float cu = (u == 0) ? 1.0f / sqrtf(2.f) : 1.0f;  // Scaling factors
                     float cv = (v == 0) ? 1.0f / sqrtf(2.f) : 1.0f;
-                    sum += cu * cv * block[v*FJPEG_BLOCK_SIZE+u] * cosf((2.f * x + 1.f) * u * M_PI / 16.f) * cosf((2.f * y + 1.f) * v * M_PI / 16.f);
+                    sum += cu * cv * block[v*FJPEG_BLOCK_SIZE+u] * context->precalc_cos[x][u]  * context->precalc_cos[y][v] ;
                 }
             }
             out[y*FJPEG_BLOCK_SIZE+x] = (fjpeg_pixel_t)((0.25f * sum)+128.0f);  // Apply constant factor
@@ -608,27 +610,29 @@ int main(int argc, char** argv) {
 
     fjpeg_coeff_t dct_block[64];
     fjpeg_coeff_t dct_block2[64];
-
+    #ifdef FJPEG_DEBUG_DCT_BLOCK
     fjpeg_pixel_t* image = new fjpeg_pixel_t[1280*720];
+    #endif
 
     start = std::chrono::high_resolution_clock::now();
 
     for(int y = 0; y < context->height; y+=8) {
         for(int x = 0; x < context->width; x+=8) {
             fjpeg_extract_8x8(context, cur_block, x, y, 0);
-            fjpeg_dct8x8(cur_block, dct_block);
+            fjpeg_dct8x8(context, cur_block, dct_block);
             fjpeg_quant8x8(context, dct_block,dct_block2, 0);
             fjpeg_zigzag8x8(dct_block2, dct_block);
             fjpeg_store_coeff_8x8(context, dct_block, x, y, 0);
-
+            #ifdef FJPEG_DEBUG_DCT_BLOCK
             fjpeg_izigzag8x8(dct_block, dct_block2);
             fjpeg_dequant8x8(context, dct_block2, dct_block, 0);
-            fjpeg_idct8x8(dct_block, cur_block);
+            fjpeg_idct8x8(context, dct_block, cur_block);
             for (int j = 0; j < 8; j++) {
                 for (int i = 0; i < 8; i++) {
                     image[(y + j) * context->width + (x + i)] = cur_block[j * 8 + i];
                 }
             }
+            #endif
         }
     }
 
@@ -636,7 +640,7 @@ int main(int argc, char** argv) {
         for(int y = 0; y < context->height/2; y+=8) {
             for(int x = 0; x < context->width/2; x+=8) {
                 fjpeg_extract_8x8(context, cur_block, x, y, 1);
-                fjpeg_dct8x8(cur_block, dct_block);
+                fjpeg_dct8x8(context, cur_block, dct_block);
                 fjpeg_quant8x8(context, dct_block,dct_block2, 1);
                 fjpeg_zigzag8x8(dct_block2, dct_block);
                 fjpeg_store_coeff_8x8(context, dct_block, x, y, 1);
@@ -646,7 +650,7 @@ int main(int argc, char** argv) {
         for(int y = 0; y < context->height/2; y+=8) {
             for(int x = 0; x < context->width/2; x+=8) {
                 fjpeg_extract_8x8(context, cur_block, x, y, 2);
-                fjpeg_dct8x8(cur_block, dct_block);
+                fjpeg_dct8x8(context, cur_block, dct_block);
                 fjpeg_quant8x8(context, dct_block,dct_block2, 2);
                 fjpeg_zigzag8x8(dct_block2, dct_block);
                 fjpeg_store_coeff_8x8(context, dct_block, x, y, 2);
@@ -721,7 +725,9 @@ int main(int argc, char** argv) {
     printf("Output size: %d bytes\r\n", file_size);
 
     delete stream;
+    #ifdef FJPEG_DEBUG_DCT_BLOCK
     delete [] image;
+    #endif
 
     return 0;
 
