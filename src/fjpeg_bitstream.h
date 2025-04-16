@@ -45,6 +45,43 @@ class fjpeg_bitstream {
 
     fjpeg_bitstream(FILE *fp) : current(0), offset(0), fp(fp), avoidFF(false) {}
 
+    uint32_t readBits(int bits) {
+        if(bits <= 0) return 0;
+        assert(bits <= 32);
+        uint32_t result = 0;
+        while (bits > 0) {
+            if (offset == 0) {
+                current = fgetc(fp);
+                if (current == EOF) {
+                    fprintf(stderr, "Error: Unexpected end of file\n");
+                    exit(1);
+                }
+                offset = 8;
+            }
+            int shift = bits - offset;
+            if (shift > 0) {
+                result |= current << shift;
+                bits -= offset;
+                offset = 0;
+            } else {
+                result |= current >> -shift;
+                offset -= bits;
+                current &= (1 << offset) - 1;
+                bits = 0;
+            }
+        }
+        return result;
+    }
+
+    std::vector<uint8_t> readBytes(int count) {
+        std::vector<uint8_t> result(count);
+        if(fread(result.data(), 1, count, fp) != count) {
+            fprintf(stderr, "Error: Unexpected end of file\n");
+            exit(1);
+        }        
+        return result;
+    }
+
     void writeBits(uint32_t input, int bits) {
         assert(bits > 0 && bits <= 24);
 

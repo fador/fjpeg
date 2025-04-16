@@ -47,6 +47,13 @@ class fjpeg_context {
     int quality;
     int channels;
 
+    // For decoding
+    int bpp;
+    int component_id[16];
+    int sampling_factors[16];
+    int quant_table[16];
+
+
     uint8_t fjpeg_luminance_quantization_table[64];
     uint8_t fjpeg_chrominance_quantization_table[64];
     fjpeg_huffman_table_t fjpeg_huffman_luma_dc[16];
@@ -211,3 +218,4 @@ static const char *fjpeg_version() {
 
 void fjpeg_print_usage();
 bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context);
+bool fjpeg_read_headers(fjpeg_bitstream* stream, fjpeg_context* context) ;

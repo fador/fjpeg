@@ -80,5 +80,14 @@ const fjpeg_short_huffman_table_t fjpeg_default_huffman_chroma_ac = {
 class fjpeg_bitstream;
 class fjpeg_context;
 
+typedef struct {
+    uint32_t luma_dc[12];
+    uint32_t luma_ac[256];
+    uint32_t chroma_dc[12];
+    uint32_t chroma_ac[256];
+} fjpeg_huffman_statistics_t;
+
 uint8_t fjpeg_generate_tables(fjpeg_huffman_table_t* output_table, const fjpeg_short_huffman_table_t* data);
 int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, fjpeg_coeff_t* block, int channel, int last_dc);
+int fjpeg_entropy_stats(fjpeg_huffman_statistics_t* stat, fjpeg_context* context, fjpeg_coeff_t* block, int channel, int last_dc);
+fjpeg_short_huffman_table_t fjpeg_generate_huffman_from_stats(fjpeg_huffman_table_t* huff_table, uint32_t* freq_array, int size);

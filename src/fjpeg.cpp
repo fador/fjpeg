@@ -49,7 +49,125 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //#define FJPEG_DEBUG_BLOCK 1
 //#define FJPEG_DEBUG_COEFF 1
 
+bool fjpeg_read_headers(fjpeg_bitstream* stream, fjpeg_context* context) {
+    // Read headers
+    uint16_t marker = stream->readBits(16);
+    if(marker != 0xFFD8) {
+        fprintf(stderr, "Error: Not a JPEG file\n");
+        return false;
+    }
 
+    uint8_t bits[16];
+    fjpeg_short_huffman_table_t* huffman_table = nullptr;
+    fjpeg_huffman_table_t* huffman_table_long = nullptr;
+    uint32_t type;
+    uint16_t version;
+    uint8_t xthumb;
+    uint8_t ythumb;
+    uint8_t tmp;
+    uint8_t table;
+    std::vector<uint8_t> data;
+    while(true) {
+        marker = stream->readBits(16);
+        fprintf(stderr, "Marker: %04X\n", marker);
+        if(marker == 0xFFD9) {
+            break;
+        }
+
+        uint16_t length = stream->readBits(16);
+        switch(marker) {
+            case 0xFFE0: // APP0
+                type = stream->readBits(32); // "JFIF"
+                stream->readBits(8); // "\0"
+                version = stream->readBits(16); // Version
+                stream->readBits(8); // Units
+                stream->readBits(16); // X density
+                stream->readBits(16); // Y density
+                xthumb = stream->readBits(8); // X thumbnail
+                ythumb = stream->readBits(8); // Y thumbnail                
+                if(xthumb > 0 && ythumb > 0) {
+                    stream->readBytes(xthumb * ythumb * 3);
+                }
+                break;
+            case 0xFFDB: // DQT
+                while(length > 2) {
+                    
+                    tmp = stream->readBits(8);
+                    int table = tmp & 0x0f;
+                    for(int j = 0; j < 64; j++) {
+                        context->fjpeg_luminance_quantization_table[j] = stream->readBits(8);
+                    }
+                }                
+                break;
+            case 0xFFC0: // SOF0
+                context->channels = stream->readBits(8);
+                context->height = stream->readBits(16);
+                context->width = stream->readBits(16);
+                context->bpp = stream->readBits(8); // Bits per sample
+                for(int i = 0; i < context->channels; i++) {
+                    context->component_id[i] = stream->readBits(8); // Component ID
+                    context->sampling_factors[i] = stream->readBits(8); // Sampling factors
+                    context->quant_table[i] = stream->readBits(8); // Quant table
+                }
+                break;
+            case 0xFFC4: // DHT
+                while(length > 2) {
+                    type = stream->readBits(4);
+                    table = stream->readBits(4);
+                    
+                    for(int i = 0; i < 16; i++) {
+                        bits[i] = stream->readBits(8);
+                    }
+                    int total = 0;
+                    for(int i = 0; i < 16; i++) {
+                        total += bits[i];
+                    }
+                    
+                    if(type == 0) {
+                        huffman_table = &context->fjpeg_short_huffman_luma_dc;
+                        huffman_table_long = context->fjpeg_huffman_luma_dc;
+                    } else if(type == 1) {
+                        huffman_table = &context->fjpeg_short_huffman_luma_ac;
+                        huffman_table_long = context->fjpeg_huffman_luma_ac;
+                    } else if(type == 16) {
+                        huffman_table = &context->fjpeg_short_huffman_chroma_dc;
+                        huffman_table_long = context->fjpeg_huffman_chroma_dc;
+                    } else if(type == 17) {
+                        huffman_table = &context->fjpeg_short_huffman_chroma_ac;
+                        huffman_table_long = context->fjpeg_huffman_chroma_ac;
+                    }
+                    if(huffman_table) {
+                        for(int i = 0; i < total; i++) {
+                            huffman_table->bits[i] = bits[i];
+                            huffman_table->val[i] = stream->readBits(8);                        
+                        }
+                    }
+                    fjpeg_generate_tables(huffman_table_long, huffman_table);
+                }
+                break;
+            case 0xFFDA: // SOS
+                stream->readBits(8); // Length
+                context->channels = stream->readBits(8);
+                for(int i = 0; i < context->channels; i++) {
+                    stream->readBits(8); // Component ID
+                    stream->readBits(8); // Huffman table
+                }
+                stream->readBits(8); // DCT coeff start
+                stream->readBits(8); // DCT coeff end
+                stream->readBits(8); // Successive Approximation
+                break;
+            case 0xFFFE: // COM
+                data = stream->readBytes(length-2);
+                fprintf(stderr, "Comment: %s\n", std::string(data.begin(), data.end()).c_str());
+                break;
+            default:
+                fprintf(stderr, "Error: Unsupported marker %04X\n", marker);
+                return false;
+        }
+    }
+
+
+}
 
 // Generate jpeg header
 bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
@@ -115,6 +233,35 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
         stream->writeBits(i==0?0:1, 8); // Quant table
     }
 
+    // Calculate huffman statistics
+    int last_dc_coeff[3] = {0, 0, 0};
+    fjpeg_coeff_t dct_block[64];
+    const int inc_xy = context->channels==1?8:16;
+    const int max_uv = context->channels==1?1:2;
+    fjpeg_huffman_statistics_t huff_stats;
+
+    memset(&huff_stats, 0, sizeof(fjpeg_huffman_statistics_t));
+
+    for(int y = 0; y < context->height; y+=inc_xy) {
+        for(int x = 0; x < context->width; x+=inc_xy) {
+            for(int v = 0; v < max_uv; v++) {
+                for(int u = 0; u < max_uv; u++) {
+                    fjpeg_extract_coeff_8x8(context, dct_block, x+u*8, y+v*8, 0);
+                    last_dc_coeff[0] = fjpeg_entropy_stats(&huff_stats, context, dct_block, 0, last_dc_coeff[0]);                     
+                }
+            }
+            if(context->channels==3) {
+                fjpeg_extract_coeff_8x8(context, dct_block, x>>1, y>>1, 1);   
+                last_dc_coeff[1] = fjpeg_entropy_stats(&huff_stats, context, dct_block, 1, last_dc_coeff[1]);
+
+                fjpeg_extract_coeff_8x8(context, dct_block, x>>1, y>>1, 2);
+                last_dc_coeff[2] = fjpeg_entropy_stats(&huff_stats, context, dct_block, 2, last_dc_coeff[2]);
+            }
+        }
+    }
+    context->fjpeg_short_huffman_luma_dc = fjpeg_generate_huffman_from_stats(context->fjpeg_huffman_luma_dc, huff_stats.luma_dc, 12);
+
+    //exit(1);
 
     // DHT
     stream->writeBits(0xFFC4, 16); // Huffman tables
@@ -199,11 +346,9 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
     // Entropy coded huffman data
     // Luma from context->fjpeg_ydct
     // Chroma from context->fjpeg_cbdct and context->fjpeg_crdct
-    int last_dc_coeff[3] = {0, 0, 0};
-    fjpeg_coeff_t dct_block[64];
+
     stream->avoidFF = true;
-    const int inc_xy = context->channels==1?8:16;
-    const int max_uv = context->channels==1?1:2;
+    memset(&last_dc_coeff, 0, sizeof(last_dc_coeff));
     
     for(int y = 0; y < context->height; y+=inc_xy) {
         for(int x = 0; x < context->width; x+=inc_xy) {
@@ -254,5 +399,6 @@ void fjpeg_print_usage() {
     printf("  -q <quality>  Set quality factor (1-100)\r\n");
     printf("  -r <width>x<height>  Set resolution\r\n");
     printf("  -o <output_filename>  Output JPEG file\r\n");
+    printf("  -d  Decode JPEG file\r\n");
     printf("  -h  Show help\r\n");
 }

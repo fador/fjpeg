@@ -49,6 +49,7 @@ int main(int argc, char** argv) {
     int quality = 50;
     int width = 0;
     int height = 0;
+    bool encode = true;
 
     // Parse filename, quality and resolution
     for(int i = 1; i < argc; i++) {
@@ -111,6 +112,14 @@ int main(int argc, char** argv) {
             fjpeg_print_usage();
             return 0;
         }
+        else if(strcmp(argv[i], "-d") == 0) {
+            encode = false;            
+        }
+        else {
+            fprintf(stderr, "Error: Unknown option %s\n", argv[i]);
+            fjpeg_print_usage();
+            return 1;
+        }
     }
 
     if(input_filename.empty()) {
@@ -123,7 +132,7 @@ int main(int argc, char** argv) {
         fjpeg_print_usage();
         return 1;
     }
-    if(width == 0 || height == 0) {
+    if(encode && (width == 0 || height == 0)) {
         fprintf(stderr, "Error: Missing resolution\n");
         fjpeg_print_usage();
         return 1;
@@ -136,6 +145,22 @@ int main(int argc, char** argv) {
 
 
     fjpeg_context* context = new fjpeg_context();
+
+    if(!encode) {
+        FILE* fp = fopen(input_filename.c_str(), "rb");
+        if(!fp) {
+            fprintf(stderr, "Error: Unable to open input file\n");
+            return 1;
+        }
+        fjpeg_bitstream* stream = new fjpeg_bitstream(fp);
+        if(!fjpeg_read_headers(stream, context)) {
+            fprintf(stderr, "Error: Unable to read headers\n");
+            return 1;
+        }
+        fclose(fp);
+        delete stream;
+        exit(0);
+    }
 
     context->setQuality(quality);
 
