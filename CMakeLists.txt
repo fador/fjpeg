@@ -34,3 +34,5 @@ target_link_libraries(fjpeg-cli PUBLIC fjpeg)
 # Make the cli binary output name fjpeg
 set_target_properties(fjpeg-cli PROPERTIES OUTPUT_NAME fjpeg)
 set_target_properties(fjpeg-cli PROPERTIES RUNTIME_OUTPUT_NAME fjpeg)
+
+add_executable(fjpeg-arith src/fjpeg_arith.cpp)
