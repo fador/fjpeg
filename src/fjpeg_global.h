@@ -51,7 +51,17 @@ typedef float fjpeg_coeff_t;
 
 // Round to nearest integer (half away from zero). A plain (int)(x + 0.5f)
 // truncates towards zero for negative values and biases the coefficients.
+// FJPEG_QUANT_DEADZONE widens the zero bin; values below it quantize to zero,
+// which trades a little distortion for fewer transmitted coefficients.
+#ifndef FJPEG_QUANT_DEADZONE
+#define FJPEG_QUANT_DEADZONE 0.65f
+#endif
+
 static inline int fjpeg_round(float x) {
+    float ax = (x < 0.0f) ? -x : x;
+    if (ax < FJPEG_QUANT_DEADZONE) {
+        return 0;
+    }
     return (x >= 0.0f) ? (int)(x + 0.5f) : (int)(x - 0.5f);
 }
 
