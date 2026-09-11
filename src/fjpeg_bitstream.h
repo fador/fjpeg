@@ -111,6 +111,17 @@ class fjpeg_bitstream {
             int pad = 8 - (offset & 7);
             writeBits((1u << pad) - 1, pad);
         }
+        // Emit all complete bytes now, while byte stuffing still applies.
+        // Otherwise the last entropy byte would be flushed after byte stuffing
+        // has been disabled and a 0xFF would not be escaped.
+        while (offset >= 8) {
+            uint8_t val = (current >> (offset - 8)) & 0xff;
+            buffer.push_back(val);
+            if (avoidFF && val == 0xff) {
+                buffer.push_back(0);
+            }
+            offset -= 8;
+        }
     }
 
     void flushToFile() {

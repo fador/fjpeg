@@ -240,6 +240,19 @@ static void fjpeg_run_trellis(fjpeg_context* context) {
     }
 }
 
+// Apply rate-distortion optimized re-quantization if enabled. The current
+// Huffman tables are built from the plain quantization and used as the rate
+// model; the caller is expected to re-gather statistics afterwards.
+void fjpeg_trellis_optimize(fjpeg_context* context) {
+    if (context->trellis_lambda <= 0.0f) {
+        return;
+    }
+    fjpeg_huffman_statistics_t stats;
+    fjpeg_gather_stats(context, &stats);
+    fjpeg_generate_huffman_tables(context, &stats);
+    fjpeg_run_trellis(context);
+}
+
 // Generate jpeg header
 bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
     
@@ -304,19 +317,13 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
         stream->writeBits(i==0?0:1, 8); // Quant table
     }
 
-    // Calculate huffman statistics and generate the optimal tables.
+    // Optional rate-distortion optimized re-quantization, then gather the
+    // Huffman statistics and generate the optimal tables.
+    fjpeg_trellis_optimize(context);
+
     fjpeg_huffman_statistics_t huff_stats;
     fjpeg_gather_stats(context, &huff_stats);
     fjpeg_generate_huffman_tables(context, &huff_stats);
-
-    // Optional rate-distortion optimized re-quantization. The trellis uses the
-    // first-pass tables as a rate model, then the tables are rebuilt from the
-    // chosen coefficients so the bitstream stays consistent.
-    if(context->trellis_lambda > 0.0f) {
-        fjpeg_run_trellis(context);
-        fjpeg_gather_stats(context, &huff_stats);
-        fjpeg_generate_huffman_tables(context, &huff_stats);
-    }
 
     int luma_dc_count = 0;
     int luma_ac_count = 0;
@@ -471,6 +478,7 @@ void fjpeg_print_usage() {
     printf("  -r <width>x<height>  Set resolution\r\n");
     printf("  -o <output_filename>  Output JPEG file\r\n");
     printf("  -t  Enable rate-distortion optimized (trellis) quantization\r\n");
+    printf("  -p  Write a progressive JPEG (spectral selection)\r\n");
     printf("  -l <lambda>  Set trellis Lagrange multiplier (default 0.01)\r\n");
     printf("  -d  Decode JPEG file\r\n");
     printf("  -h  Show help\r\n");

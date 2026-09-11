@@ -50,6 +50,7 @@ int main(int argc, char** argv) {
     int width = 0;
     int height = 0;
     bool encode = true;
+    bool progressive = false;
     float trellis_lambda = 0.0f;
 
     // Parse filename, quality and resolution
@@ -111,6 +112,9 @@ int main(int argc, char** argv) {
         }
         else if(strcmp(argv[i], "-t") == 0) {
             trellis_lambda = 0.01f;
+        }
+        else if(strcmp(argv[i], "-p") == 0) {
+            progressive = true;
         }
         else if(strcmp(argv[i], "-l") == 0) {
             if(i+1 < argc) {
@@ -256,7 +260,11 @@ int main(int argc, char** argv) {
     fjpeg_bitstream* stream = new fjpeg_bitstream(fp);
 
     start = std::chrono::high_resolution_clock::now();
-    fjpeg_generate_header(stream, context);
+    if(progressive) {
+        fjpeg_generate_progressive(stream, context);
+    } else {
+        fjpeg_generate_header(stream, context);
+    }
     end = std::chrono::high_resolution_clock::now();
     time_header_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 

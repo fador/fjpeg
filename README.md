@@ -9,13 +9,15 @@ stage of the pipeline.
 
 **Key Features**
 
-* Baseline (sequential, 8-bit) JPEG encoding
+* Baseline (sequential, 8-bit) and progressive JPEG encoding
 * Full pipeline: raw YUV input → FDCT → quantization → zigzag → run-length
   coding → Huffman entropy coding → bitstream with 0xFF byte stuffing
 * Per-image optimal Huffman tables (DC and AC, luma and chroma), generated
   from a first-pass statistics scan
 * Optional rate-distortion optimized (trellis) quantization of the AC
   coefficients
+* Progressive mode: separate DC (with successive approximation) and
+  per-component AC spectral-selection scans
 * Standard ITU-T T.81 quantization tables with libjpeg-compatible quality
   scaling, plus a tunable quantization deadzone
 * 4:2:0 chroma subsampling and a separable (2-pass) FDCT
@@ -51,6 +53,7 @@ Options:
 -o <output_filename>   output JPEG file
 -t                     enable rate-distortion optimized (trellis) quantization
 -l <lambda>            trellis Lagrange multiplier (default 0.01)
+-p                     write a progressive JPEG
 -d                     decode an existing JPEG (work in progress)
 -h                     show help
 ```
@@ -63,6 +66,7 @@ Options:
 | `src/fjpeg.h` | `fjpeg_context`, quality scaling, input loading |
 | `src/fjpeg_transquant.cpp` | block extraction, FDCT/IDCT, quantization, zigzag, trellis |
 | `src/fjpeg_huffman.cpp` | statistics pass, optimal Huffman generation, entropy coding |
+| `src/fjpeg_progressive.cpp` | progressive frame/scan layout and scan entropy coding |
 | `src/fjpeg_bitstream.h` | bit reader/writer, 0xFF stuffing, file flushing |
 | `src/fjpeg_global.h` | types, default quantization tables, zigzag tables |
 | `src/fjpeg_huffman.h` | default Huffman tables and statistics struct |
@@ -132,15 +136,46 @@ also suffered from the rounding and tail bugs). At 1280×720 / quality 75 the
 separable FDCT reduced the DCT/quantization stage from ~76 ms to ~9 ms on the
 test machine.
 
+**Progressive JPEG**
+
+Passing `-p` writes a progressive (SOF2) JPEG instead of the baseline file. The
+default scan script is:
+
+1. DC, all components, first scan (`Ah=0, Al=1`)
+2. DC refinement (`Ah=1, Al=0`)
+3. Luma AC, `Ss=1..5`
+4. Luma AC, `Ss=6..63`
+5. Cb AC, `Ss=1..5`
+6. Cb AC, `Ss=6..63`
+7. Cr AC, `Ss=1..5`
+8. Cr AC, `Ss=6..63`
+
+Every scan carries its own optimal Huffman tables, written in a DHT segment
+immediately before the scan. The DC scans are interleaved across components;
+each AC scan is non-interleaved (one component), as the JPEG specification
+requires for progressive AC scans.
+
+Because the scans together carry the same coefficients as the baseline encoder,
+a decoded progressive file is **byte-for-byte identical** to the corresponding
+baseline decode. This was verified with both ffmpeg and libjpeg (Pillow) across
+several images, qualities (30/60/85) and resolutions (320×240 up to 1600×900),
+and with `-t` as well. Progressive files are typically a few percent larger
+than baseline because of the per-scan headers and because the DC and AC
+statistics are no longer shared.
+
 **Further Improvement Opportunities**
 
+* **AC successive approximation.** The current progressive encoder sends AC
+  bands at full precision in a single pass per band. Adding AC refinement scans
+  (`Al` decreasing) would give the low-bitrate previews that progressive JPEG
+  is known for.
 * **Trellis refinements.** The DC coefficient is still rounded independently of
   the trellis, and the run-length rate could be modelled more precisely. A
   cross-block trellis over the differential DC prediction is another option.
 * **Integer / AAN fast DCT.** An integer or AAN-scaled transform would remove
   the remaining floating-point cost and improve numerical determinism.
-* **Progressive JPEG and restart markers.** Progressive scans and restarts
-  improve error resilience and can improve rate-distortion at low bitrates.
+* **Restart markers.** Restarts improve error resilience for both baseline and
+  progressive streams.
 * **Multithreading.** The per-block DCT and the statistics/entropy passes are
   embarrassingly parallel.
 * **Decoder.** Complete `fjpeg_read_headers` (it currently returns without a
@@ -148,8 +183,10 @@ test machine.
 
 **Limitations**
 
-* Baseline sequential JPEG only; no progressive, lossless, or arithmetic
-  JPEG output.
+* Sequential and progressive JPEG output only; no 12-bit, lossless or
+  arithmetic-coded JPEG output.
+* Progressive AC scans use spectral selection only (no AC successive
+  approximation refinement yet).
 * Raw YUV 4:2:0 input only; there is no color-space conversion or file-format
   handling. Width and height must be even; edge blocks for non-MCU-aligned
   dimensions are handled by replicating the last row/column.
