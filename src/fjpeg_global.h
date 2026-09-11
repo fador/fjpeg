@@ -49,6 +49,12 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 typedef uint8_t fjpeg_pixel_t;
 typedef float fjpeg_coeff_t;
 
+// Round to nearest integer (half away from zero). A plain (int)(x + 0.5f)
+// truncates towards zero for negative values and biases the coefficients.
+static inline int fjpeg_round(float x) {
+    return (x >= 0.0f) ? (int)(x + 0.5f) : (int)(x - 0.5f);
+}
+
 #define FJPEG_UINT32_MAX 0xFFFFFFFF
 #define FJPEG_BLOCK_SIZE 8
 

@@ -102,14 +102,14 @@ int fjpeg_entropy_stats(fjpeg_huffman_statistics_t* stat, fjpeg_context* context
     // Check for last coeff
     int last_coeff = 0;
     for(int i = FJPEG_BLOCK_SIZE*FJPEG_BLOCK_SIZE-1; i >= 0; i--) {
-        if((int)(block[i]+0.5f) != 0) {
+        if(fjpeg_round(block[i]) != 0) {
             last_coeff = i;
             break;
         }        
     }
 
     // Code DC coefficient
-    int coeff = (int)(block[0]+0.5f); // Quantized DCT coefficients
+    int coeff = fjpeg_round(block[0]); // Quantized DCT coefficients
     int diff = coeff - last_dc_coeff;
     last_dc_coeff = coeff;
     int orig_diff = diff;
@@ -140,13 +140,13 @@ int fjpeg_entropy_stats(fjpeg_huffman_statistics_t* stat, fjpeg_context* context
     for (i = 1; i < FJPEG_BLOCK_SIZE*FJPEG_BLOCK_SIZE; i++) {
         
         int run_length = 0;
-        coeff = (int)(block[i]+0.5f);
+        coeff = fjpeg_round(block[i]);
 
         // Run-length coding for AC coefficients
         while (coeff == 0 && i < FJPEG_BLOCK_SIZE*FJPEG_BLOCK_SIZE - 1) {
             run_length++;
             i++;
-            coeff = (int)(block[i]+0.5f);
+            coeff = fjpeg_round(block[i]);
             if(i > last_coeff) {
                 break;
             }
@@ -200,14 +200,14 @@ int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, 
     // Check for last coeff
     int last_coeff = 0;
     for(int i = FJPEG_BLOCK_SIZE*FJPEG_BLOCK_SIZE-1; i >= 0; i--) {
-        if((int)(block[i]+0.5f) != 0) {
+        if(fjpeg_round(block[i]) != 0) {
             last_coeff = i;
             break;
         }        
     }
 
     // Code DC coefficient
-    int coeff = (int)(block[0]+0.5f); // Quantized DCT coefficients
+    int coeff = fjpeg_round(block[0]); // Quantized DCT coefficients
     #ifdef FJPEG_DEBUG_COEFF
     printf("Coeff %d\r\n", coeff);
     #endif
@@ -252,13 +252,13 @@ int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, 
     for (i = 1; i < FJPEG_BLOCK_SIZE*FJPEG_BLOCK_SIZE; i++) {
         
         int run_length = 0;
-        coeff = (int)(block[i]+0.5f);
+        coeff = fjpeg_round(block[i]);
 
         // Run-length coding for AC coefficients
         while (coeff == 0 && i < FJPEG_BLOCK_SIZE*FJPEG_BLOCK_SIZE - 1) {
             run_length++;
             i++;
-            coeff = (int)(block[i]+0.5f);
+            coeff = fjpeg_round(block[i]);
             if(i > last_coeff) {
                 break;
             }
