@@ -259,13 +259,32 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
             }
         }
     }
+    // Generate optimal, length-limited Huffman tables for every table from the
+    // gathered statistics instead of using the generic default tables.
+    memset(context->fjpeg_huffman_luma_dc, 0, sizeof(context->fjpeg_huffman_luma_dc));
+    memset(context->fjpeg_huffman_luma_ac, 0, sizeof(context->fjpeg_huffman_luma_ac));
+    memset(context->fjpeg_huffman_chroma_dc, 0, sizeof(context->fjpeg_huffman_chroma_dc));
+    memset(context->fjpeg_huffman_chroma_ac, 0, sizeof(context->fjpeg_huffman_chroma_ac));
+
     context->fjpeg_short_huffman_luma_dc = fjpeg_generate_huffman_from_stats(context->fjpeg_huffman_luma_dc, huff_stats.luma_dc, 12);
+    context->fjpeg_short_huffman_luma_ac = fjpeg_generate_huffman_from_stats(context->fjpeg_huffman_luma_ac, huff_stats.luma_ac, 256);
+    context->fjpeg_short_huffman_chroma_dc = fjpeg_generate_huffman_from_stats(context->fjpeg_huffman_chroma_dc, huff_stats.chroma_dc, 12);
+    context->fjpeg_short_huffman_chroma_ac = fjpeg_generate_huffman_from_stats(context->fjpeg_huffman_chroma_ac, huff_stats.chroma_ac, 256);
 
-    //exit(1);
+    int luma_dc_count = 0;
+    int luma_ac_count = 0;
+    int chroma_dc_count = 0;
+    int chroma_ac_count = 0;
+    for (int i = 0; i < 16; i++) {
+        luma_dc_count += context->fjpeg_short_huffman_luma_dc.bits[i];
+        luma_ac_count += context->fjpeg_short_huffman_luma_ac.bits[i];
+        chroma_dc_count += context->fjpeg_short_huffman_chroma_dc.bits[i];
+        chroma_ac_count += context->fjpeg_short_huffman_chroma_ac.bits[i];
+    }
 
-    // DHT
+    // DHT: luma DC and luma AC share one segment.
     stream->writeBits(0xFFC4, 16); // Huffman tables
-    stream->writeBits(31+179, 16); // Length
+    stream->writeBits(2 + (1 + 16 + luma_dc_count) + (1 + 16 + luma_ac_count), 16); // Length
     stream->writeBits(0, 4); // DC
     stream->writeBits(0, 4); // Table ID
 
@@ -273,12 +292,10 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
         stream->writeBits(context->fjpeg_short_huffman_luma_dc.bits[i], 8);
     }
 
-    for (int i = 0; i < 12; i++) {
+    for (int i = 0; i < luma_dc_count; i++) {
         stream->writeBits(context->fjpeg_short_huffman_luma_dc.val[i], 8);
     }
 
-    //stream->writeBits(0xFFC4, 16); // Huffman tables
-    //stream->writeBits(181, 16); // Length
     stream->writeBits(1, 4); // AC
     stream->writeBits(0, 4); // Table ID
 
@@ -286,13 +303,13 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
         stream->writeBits(context->fjpeg_short_huffman_luma_ac.bits[i], 8);
     }
 
-    for (int i = 0; i < 162; i++) {
+    for (int i = 0; i < luma_ac_count; i++) {
         stream->writeBits(context->fjpeg_short_huffman_luma_ac.val[i], 8);
     }
 
     if(context->channels > 1) {
         stream->writeBits(0xFFC4, 16); // Huffman tables
-        stream->writeBits(210, 16); // Length
+        stream->writeBits(2 + (1 + 16 + chroma_dc_count) + (1 + 16 + chroma_ac_count), 16); // Length
 
         stream->writeBits(0, 4); // DC
         stream->writeBits(1, 4); // Table ID
@@ -301,7 +318,7 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
             stream->writeBits(context->fjpeg_short_huffman_chroma_dc.bits[i], 8);
         }
 
-        for (int i = 0; i < 12; i++) {
+        for (int i = 0; i < chroma_dc_count; i++) {
             stream->writeBits(context->fjpeg_short_huffman_chroma_dc.val[i], 8);
         }
 
@@ -312,7 +329,7 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
             stream->writeBits(context->fjpeg_short_huffman_chroma_ac.bits[i], 8);
         }
 
-        for (int i = 0; i < 162; i++) {
+        for (int i = 0; i < chroma_ac_count; i++) {
             stream->writeBits(context->fjpeg_short_huffman_chroma_ac.val[i], 8);
         }
     }
@@ -379,6 +396,7 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
             }
         }
     }
+    stream->padToByte();
     stream->avoidFF = false;
 
 

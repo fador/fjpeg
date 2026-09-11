@@ -321,138 +321,118 @@ int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, 
 }
 
 fjpeg_short_huffman_table_t fjpeg_generate_huffman_from_stats(fjpeg_huffman_table_t* huff_table, uint32_t* freq_array, int size) {
-    // Generate Huffman tree from statistics
-    
+    // Generate an optimal, length-limited (<=16 bits) Huffman table from statistics.
+    // This follows the procedure described in section K.2 of the JPEG specification.
+
     fjpeg_short_huffman_table_t huff_short;
     memset(&huff_short, 0, sizeof(fjpeg_short_huffman_table_t));
-    uint32_t freq[256] = {0};
-    int codesize[256] = {0};
-    int32_t others[256];
-    memset(others, -1, 256 * sizeof(int32_t));
 
-    bool done = false;
+    uint64_t freq[257];
+    int codesize[257];
+    int others[257];
+    int bits[257];
 
-    uint32_t current_least = 0xffffffff;
-    int current_V1 = 0;
-    int current_V2 = 0;
+    for (int i = 0; i < 257; i++) {
+        freq[i] = (i < size) ? (uint64_t)freq_array[i] : 0;
+        codesize[i] = 0;
+        others[i] = -1;
+    }
+    memset(bits, 0, sizeof(bits));
 
-    memcpy(freq, freq_array, size * sizeof(int));
-
-    for(int i = 0; i < size; i++) {
-        printf("DC %d freq %d\r\n", i, freq[i]);
-        freq[i] += 1;
+    // Guarantee at least one symbol so we never build an empty table.
+    bool any = false;
+    for (int i = 0; i < size; i++) {
+        if (freq[i] != 0) { any = true; break; }
+    }
+    if (!any) {
+        freq[0] = 1;
     }
 
-    // Find code sizes for all symbols
-    while(!done) {
-        // Find two smallest frequencies
-        bool found = false;
-        for(int i = 0; i < size; i++) {
-            if(freq[i] != 0 && freq[i] < current_least) {
-                current_least = freq[i];
-                current_V1 = i;
-                found = true;
+    // Pseudo-symbol 256 guarantees no real symbol receives the all-ones code.
+    freq[256] = 1;
+
+    // Huffman's algorithm: repeatedly merge the two least frequent symbols.
+    for (;;) {
+        int c1 = -1, c2 = -1;
+        uint64_t v = UINT64_MAX;
+        for (int i = 0; i <= 256; i++) {
+            if (freq[i] && freq[i] <= v) { v = freq[i]; c1 = i; }
+        }
+        v = UINT64_MAX;
+        for (int i = 0; i <= 256; i++) {
+            if (freq[i] && freq[i] <= v && i != c1) { v = freq[i]; c2 = i; }
+        }
+        if (c2 < 0) {
+            break;
+        }
+
+        freq[c1] += freq[c2];
+        freq[c2] = 0;
+
+        codesize[c1]++;
+        while (others[c1] >= 0) {
+            c1 = others[c1];
+            codesize[c1]++;
+        }
+        others[c1] = c2;
+
+        codesize[c2]++;
+        while (others[c2] >= 0) {
+            c2 = others[c2];
+            codesize[c2]++;
+        }
+    }
+
+    // Count how many symbols use each code length and find the maximum length.
+    int maxlen = 0;
+    for (int i = 0; i <= 256; i++) {
+        if (codesize[i]) {
+            bits[codesize[i]]++;
+            if (codesize[i] > maxlen) {
+                maxlen = codesize[i];
             }
         }
-        if(!found) {
-            done = true;
-            break;
-        }
+    }
 
-        found = false;
-        current_least = 0xffffffff;
-        for(int i = 0; i < size; i++) {
-            if(freq[i] != 0 && freq[i] < current_least && i != current_V1) {
-                current_least = freq[i];
-                current_V2 = i;
-                found = true;
+    // Limit code lengths to 16 bits (JPEG requirement).
+    for (int i = maxlen; i > 16; i--) {
+        while (bits[i] > 0) {
+            int j = i - 2;
+            while (j > 0 && bits[j] == 0) {
+                j--;
+            }
+            bits[i] -= 2;
+            bits[i - 1]++;
+            bits[j + 1] += 2;
+            bits[j]--;
+        }
+    }
+
+    // Drop the pseudo-symbol from the longest code length.
+    int i = 16;
+    while (i > 0 && bits[i] == 0) {
+        i--;
+    }
+    bits[i]--;
+
+    for (i = 1; i <= 16; i++) {
+        huff_short.bits[i - 1] = (uint8_t)bits[i];
+    }
+
+    // Emit every real symbol exactly once.
+    int p = 0;
+    for (i = 1; i <= maxlen; i++) {
+        for (int j = 0; j <= 255; j++) {
+            if (codesize[j] == i) {
+                if (p < 163) {
+                    huff_short.val[p++] = (uint8_t)j;
+                }
             }
         }
-        if(!found) {
-            done = true;
-            break;
-        }
-
-        // Combine the two smallest frequencies
-        freq[current_V1] += freq[current_V2];
-        freq[current_V2] = 0;
-
-        // Increase code size for all symbols in the group
-
-        do {
-          codesize[current_V1]++;
-          if(others[current_V1] == -1) {
-            others[current_V1] = current_V2;
-            break;
-          }  
-          current_V1 = others[current_V1];
-        } while(current_V1 != -1);
-
-        do {
-          codesize[current_V2]++;
-          current_V2 = others[current_V2];
-        } while(current_V2 != -1);
-
-        // Reset
-        current_least = 0xffffffff;
     }
-
-    // Count the number of codes for each code size
-    for(int i = 0; i < size; i++) {
-        if(codesize[i] != 0) {
-            huff_short.bits[codesize[i]-1]++;
-        }
-    }
-    int sum[17] = {0};
-    for(int i = 1; i < 17; i++) {
-        sum[i] = (sum[i-1] + huff_short.bits[i-1]);
-        printf("%d ",huff_short.bits[i-1]);
-    }
-    printf("\r\n");
-
-    // Print sums
-    for(int i = 0; i < 17; i++) {
-        printf("%d ",sum[i]);
-    }
-    printf("\r\n");
-
-    // Print codesizes
-    for(int i = 0; i < size; i++) {
-        printf("%d ",codesize[i]);
-    }
-    printf("\r\n");
-
-    // Leftover values get assigned 16-bit code
-    huff_short.bits[15] = size-sum[16];
-    
-    // Assign values to codes
-    int next_code[17] = {0};
-    for(int i = 0; i < size; i++) {
-        if(codesize[i] != 0) {
-            huff_short.val[sum[codesize[i]-1]+next_code[codesize[i]]] = i;
-            next_code[codesize[i]]++;
-        } else {
-            huff_short.val[sum[16]+next_code[16]] = i;
-            next_code[16]++;
-        }
-    }
-
-    // Print hex of all values
-    for(int i = 0; i < size; i++) {
-        printf("0x%02X ", huff_short.val[i]);
-    }
-    printf("\r\n");
-
-    huff_short.val[size] = 0xFF; // End of table
+    huff_short.val[p] = 0xFF; // End of table
 
     fjpeg_generate_tables(huff_table, &huff_short);
 
-    // Assign codes
-    for(int i = 0; i < size; i++) {
-        printf("DC %d ", i);
-        for(int ii = 0; ii < huff_table[i].len; ii++) printf("%d",(huff_table[i].code>>(huff_table[i].len-ii-1))&1);
-        printf("\r\n");
-    }
-    
     return huff_short;
 }

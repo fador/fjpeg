@@ -104,18 +104,31 @@ class fjpeg_bitstream {
         offset += bits;
     }
 
+    void padToByte() {
+        // Pad the current partial byte with 1-bits so the next marker starts
+        // on a byte boundary, as required for the EOI marker.
+        if (offset & 7) {
+            int pad = 8 - (offset & 7);
+            writeBits((1u << pad) - 1, pad);
+        }
+    }
+
     void flushToFile() {
-        if (offset > 0) {
-            if(offset&7) current <<= (8-(offset&7));
-            while(offset >= 8) {
-                uint8_t val = (current >> (offset-8)) & 0xff;
-                buffer.push_back(val);
-                if(avoidFF && val == 0xff) {
-                    buffer.push_back(0);
-                }
-                offset -= 8;
+        while(offset >= 8) {
+            uint8_t val = (current >> (offset-8)) & 0xff;
+            buffer.push_back(val);
+            if(avoidFF && val == 0xff) {
+                buffer.push_back(0);
             }
-            current &= ((~0) >> (32-offset));
+            offset -= 8;
+        }
+        if(offset > 0) {
+            uint8_t val = (current << (8-offset)) & 0xff;
+            buffer.push_back(val);
+            if(avoidFF && val == 0xff) {
+                buffer.push_back(0);
+            }
+            offset = 0;
         }
         fwrite(buffer.data(), 1, buffer.size(), fp);
         buffer.clear();

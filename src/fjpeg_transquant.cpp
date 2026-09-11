@@ -95,17 +95,30 @@ bool fjpeg_store_coeff_8x8(fjpeg_context* context, fjpeg_coeff_t* input, int x, 
 
 
 fjpeg_coeff_t* fjpeg_dct8x8(fjpeg_context* context, fjpeg_pixel_t* block, fjpeg_coeff_t* out) {
-    for (int v = 0; v < FJPEG_BLOCK_SIZE; v++) {
+    // Separable 2D DCT: transform rows first, then columns. This reduces the
+    // work from O(N^4) to O(2 * N^3) per block (4096 -> 1024 multiplies).
+    float tmp[FJPEG_BLOCK_SIZE * FJPEG_BLOCK_SIZE];
+    const float c = 1.0f / sqrtf(2.0f);
+
+    for (int y = 0; y < FJPEG_BLOCK_SIZE; y++) {
         for (int u = 0; u < FJPEG_BLOCK_SIZE; u++) {
             float sum = 0.0f;
-            float cu = (u == 0) ? 1.0f / sqrtf(2.f) : 1.0f;  // Scaling factors
-            float cv = (v == 0) ? 1.0f / sqrtf(2.f) : 1.0f;
             for (int x = 0; x < FJPEG_BLOCK_SIZE; x++) {
-                for (int y = 0; y < FJPEG_BLOCK_SIZE; y++) {                    
-                    sum += (((float)block[y*FJPEG_BLOCK_SIZE+x])-128.f) *context->precalc_cos[x][u]  * context->precalc_cos[y][v] ;
-                }
+                sum += ((float)block[y * FJPEG_BLOCK_SIZE + x] - 128.0f) * context->precalc_cos[x][u];
             }
-            out[v*FJPEG_BLOCK_SIZE+u] = 0.25f * sum  * cu * cv;  // Apply constant factor
+            tmp[y * FJPEG_BLOCK_SIZE + u] = sum;
+        }
+    }
+
+    for (int u = 0; u < FJPEG_BLOCK_SIZE; u++) {
+        for (int v = 0; v < FJPEG_BLOCK_SIZE; v++) {
+            float sum = 0.0f;
+            for (int y = 0; y < FJPEG_BLOCK_SIZE; y++) {
+                sum += tmp[y * FJPEG_BLOCK_SIZE + u] * context->precalc_cos[y][v];
+            }
+            float cu = (u == 0) ? c : 1.0f;
+            float cv = (v == 0) ? c : 1.0f;
+            out[v * FJPEG_BLOCK_SIZE + u] = 0.25f * sum * cu * cv;
         }
     }
     return out;
