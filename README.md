@@ -14,6 +14,8 @@ stage of the pipeline.
   coding → Huffman entropy coding → bitstream with 0xFF byte stuffing
 * Per-image optimal Huffman tables (DC and AC, luma and chroma), generated
   from a first-pass statistics scan
+* Optional rate-distortion optimized (trellis) quantization of the AC
+  coefficients
 * Standard ITU-T T.81 quantization tables with libjpeg-compatible quality
   scaling, plus a tunable quantization deadzone
 * 4:2:0 chroma subsampling and a separable (2-pass) FDCT
@@ -47,6 +49,8 @@ Options:
 -r <width>x<height>    frame resolution
 -q <quality>           quality factor (1-100)
 -o <output_filename>   output JPEG file
+-t                     enable rate-distortion optimized (trellis) quantization
+-l <lambda>            trellis Lagrange multiplier (default 0.01)
 -d                     decode an existing JPEG (work in progress)
 -h                     show help
 ```
@@ -57,7 +61,7 @@ Options:
 | --- | --- |
 | `src/fjpeg.cpp` | JPEG header generation/parsing, encode loop, CLI usage text |
 | `src/fjpeg.h` | `fjpeg_context`, quality scaling, input loading |
-| `src/fjpeg_transquant.cpp` | block extraction, FDCT/IDCT, quantization, zigzag |
+| `src/fjpeg_transquant.cpp` | block extraction, FDCT/IDCT, quantization, zigzag, trellis |
 | `src/fjpeg_huffman.cpp` | statistics pass, optimal Huffman generation, entropy coding |
 | `src/fjpeg_bitstream.h` | bit reader/writer, 0xFF stuffing, file flushing |
 | `src/fjpeg_global.h` | types, default quantization tables, zigzag tables |
@@ -101,6 +105,14 @@ reduction at matched PSNR) over several natural and synthetic images:
    dropping near-zero coefficients for a **3-5.5% BD-rate** gain.
 7. **Separable FDCT.** The transform is computed as two 1-D passes, reducing
    work from O(N⁴) to O(2·N³) per block (4096 → 1024 multiplies).
+8. **Trellis quantization (opt-in, `-t`).** A dynamic program over the 63 AC
+   coefficients jointly chooses zero/nonzero, the magnitude, and the end-of-block
+   position, minimizing squared error plus `lambda` times the Huffman+VLI rate.
+   The distortion is weighted by the squared quantization step and the multiplier
+   is scaled by the mean step so the tradeoff is quality independent. Using the
+   first-pass Huffman tables as the rate model and rebuilding them afterwards
+   gives a mean **−3.8% BD-rate** across natural images (−3.1% to −5.1%),
+   including 720p.
 
 On a synthetic gradient/texture 640×480 frame (byte sizes; PSNR in dB against
 the source), original vs. the current encoder:
@@ -122,9 +134,9 @@ test machine.
 
 **Further Improvement Opportunities**
 
-* **Rate-distortion optimized quantization.** A trellis search over the AC
-  coefficients that accounts for run-length and code cost typically gains a few
-  more percent.
+* **Trellis refinements.** The DC coefficient is still rounded independently of
+  the trellis, and the run-length rate could be modelled more precisely. A
+  cross-block trellis over the differential DC prediction is another option.
 * **Integer / AAN fast DCT.** An integer or AAN-scaled transform would remove
   the remaining floating-point cost and improve numerical determinism.
 * **Progressive JPEG and restart markers.** Progressive scans and restarts
@@ -141,6 +153,8 @@ test machine.
 * Raw YUV 4:2:0 input only; there is no color-space conversion or file-format
   handling. Width and height must be even; edge blocks for non-MCU-aligned
   dimensions are handled by replicating the last row/column.
+* Trellis quantization is much slower than the default path and is therefore
+  opt-in.
 * Error handling is minimal, as befits an educational implementation.
 
 **License**

@@ -169,6 +169,176 @@ fjpeg_coeff_t* fjpeg_dequant8x8(fjpeg_context* context, fjpeg_coeff_t* input, fj
 }
 
 
+// Number of bits needed for the magnitude of v (JPEG "size" category).
+static inline int fjpeg_coeff_size(int v) {
+    int a = v < 0 ? -v : v;
+    int s = 0;
+    while (a) {
+        a >>= 1;
+        s++;
+    }
+    return s;
+}
+
+// Code length of a symbol, with a safe fallback for symbols that are absent
+// from the current (pre-trellis) Huffman table.
+static inline int fjpeg_huff_symbol_len(const fjpeg_huffman_table_t* table, int symbol) {
+    return table[symbol].len ? table[symbol].len : 16;
+}
+
+void fjpeg_trellis_quant_block(fjpeg_context* context, const fjpeg_coeff_t* block,
+                               const fjpeg_huffman_table_t* huff_ac,
+                               int channel, fjpeg_coeff_t* out) {
+    const int ZIGZAG_COUNT = FJPEG_BLOCK_SIZE * FJPEG_BLOCK_SIZE; // 64
+    const float INF = 1.0e30f;
+    const float eob_rate = (float)fjpeg_huff_symbol_len(huff_ac, 0x00);
+    const float zrl_rate = (float)fjpeg_huff_symbol_len(huff_ac, 0xF0);
+
+    // DC is coded independently of the AC run lengths, so round it as usual.
+    out[0] = (fjpeg_coeff_t)fjpeg_round(block[0]);
+
+    // The reconstruction error is Q^2 * (c - n)^2, so weight the distortion by
+    // the squared quantization step. The coefficients are in zigzag order.
+    const uint8_t* qtab = (channel == 0) ? context->fjpeg_luminance_quantization_table
+                                         : context->fjpeg_chrominance_quantization_table;
+    int inv_zigzag[ZIGZAG_COUNT];
+    for (int n = 0; n < ZIGZAG_COUNT; n++) {
+        inv_zigzag[fjpeg_zigzag_8x8[n]] = n;
+    }
+    float weight[ZIGZAG_COUNT];
+    float mean_weight = 0.0f;
+    for (int p = 0; p < ZIGZAG_COUNT; p++) {
+        float q = (float)qtab[inv_zigzag[p]];
+        weight[p] = q * q;
+        mean_weight += weight[p];
+    }
+    mean_weight /= (float)ZIGZAG_COUNT;
+    // Scale the multiplier with the quantizer so the tradeoff is independent of
+    // the quality setting.
+    const float lambda = context->trellis_lambda * mean_weight;
+
+    // Suffix distortion of zeroing coefficients p..63.
+    float suffix[ZIGZAG_COUNT + 1];
+    suffix[ZIGZAG_COUNT] = 0.0f;
+    for (int p = ZIGZAG_COUNT - 1; p >= 1; p--) {
+        suffix[p] = suffix[p + 1] + weight[p] * block[p] * block[p];
+    }
+
+    // cost[r] = best Lagrangian cost ending with r pending zeros (0..15).
+    float prev[16];
+    float cur[16];
+    for (int r = 0; r < 16; r++) {
+        prev[r] = INF;
+    }
+    prev[0] = 0.0f;
+
+    // Back-pointers for path reconstruction.
+    int16_t choice[ZIGZAG_COUNT][16];
+    int8_t from[ZIGZAG_COUNT][16];
+    memset(choice, 0, sizeof(choice));
+    memset(from, 0, sizeof(from));
+
+    // Terminating before any AC coefficient (all-zero block).
+    float best = suffix[1] + eob_rate;
+    int best_p = 0;
+    int best_r = 0;
+
+    for (int p = 1; p < ZIGZAG_COUNT; p++) {
+        for (int r = 0; r < 16; r++) {
+            cur[r] = INF;
+        }
+
+        const float cv = block[p];
+        const float w = weight[p];
+        const float dist_zero = w * cv * cv;
+
+        // Option 1: quantize this coefficient to zero.
+        for (int r = 0; r < 16; r++) {
+            if (prev[r] >= INF) continue;
+            int nr;
+            float nc = prev[r] + dist_zero;
+            if (r < 15) {
+                nr = r + 1;
+            } else {
+                nr = 0;
+                nc += zrl_rate; // a full run of 16 zeros emits ZRL
+            }
+            if (nc < cur[nr]) {
+                cur[nr] = nc;
+                choice[p][nr] = 0;
+                from[p][nr] = (int8_t)r;
+            }
+        }
+
+        // Option 2: keep a nonzero coefficient. Candidates bracket the
+        // nearest integer and the neighbouring size categories, since the
+        // rate jumps when the magnitude size changes.
+        float av = cv < 0.0f ? -cv : cv;
+        int nearest = (int)(av + 0.5f);
+        if (nearest > 0) {
+            int sign = cv < 0.0f ? -1 : 1;
+            int nearest_size = fjpeg_coeff_size(nearest);
+            int cand[3];
+            int ncand = 0;
+            cand[ncand++] = sign * nearest;
+            if (nearest_size > 1) {
+                cand[ncand++] = sign * ((1 << (nearest_size - 1)) - 1);
+            }
+            if (nearest_size < 10) {
+                cand[ncand++] = sign * (1 << nearest_size);
+            }
+            for (int ci = 0; ci < ncand; ci++) {
+                int n = cand[ci];
+                int sz = fjpeg_coeff_size(n);
+                float d = cv - (float)n;
+                d = w * d * d;
+                for (int r = 0; r < 16; r++) {
+                    if (prev[r] >= INF) continue;
+                    float rate = (float)fjpeg_huff_symbol_len(huff_ac, (r << 4) | sz) + (float)sz;
+                    float nc = prev[r] + d + lambda * rate;
+                    if (nc < cur[0]) {
+                        cur[0] = nc;
+                        choice[p][0] = (int16_t)n;
+                        from[p][0] = (int8_t)r;
+                    }
+                }
+            }
+        }
+
+        // Consider ending the block here (EOB) with the remaining AC zeros.
+        for (int r = 0; r < 16; r++) {
+            if (cur[r] >= INF) continue;
+            float term = cur[r] + suffix[p + 1];
+            if (p < ZIGZAG_COUNT - 1 || r > 0) {
+                term += eob_rate;
+            }
+            if (term < best) {
+                best = term;
+                best_p = p;
+                best_r = r;
+            }
+        }
+
+        for (int r = 0; r < 16; r++) {
+            prev[r] = cur[r];
+        }
+    }
+
+    // Reconstruct the chosen coefficients.
+    for (int p = 1; p < ZIGZAG_COUNT; p++) {
+        out[p] = 0.0f;
+    }
+    int p = best_p;
+    int r = best_r;
+    while (p >= 1) {
+        out[p] = (fjpeg_coeff_t)choice[p][r];
+        int pr = from[p][r];
+        p--;
+        r = pr;
+    }
+}
+
+
 bool fjpeg_transquant_input(fjpeg_context* context) {
     
     fjpeg_pixel_t cur_block[64];

@@ -40,4 +40,10 @@ fjpeg_coeff_t* fjpeg_quant8x8(fjpeg_context* context, fjpeg_coeff_t* input, fjpe
 fjpeg_pixel_t* fjpeg_idct8x8(fjpeg_context* context, fjpeg_coeff_t* block, fjpeg_pixel_t* out);
 fjpeg_coeff_t* fjpeg_dct8x8(fjpeg_context* context, fjpeg_pixel_t* block, fjpeg_coeff_t* out);
 
+// Rate-distortion optimized (trellis) quantization of one block.
+// Input and output are in zigzag order; the output holds integer-valued floats.
+void fjpeg_trellis_quant_block(fjpeg_context* context, const fjpeg_coeff_t* block,
+                               const fjpeg_huffman_table_t* huff_ac,
+                               int channel, fjpeg_coeff_t* out);
+
 bool fjpeg_transquant_input(fjpeg_context* context);

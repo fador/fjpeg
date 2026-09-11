@@ -169,6 +169,77 @@ bool fjpeg_read_headers(fjpeg_bitstream* stream, fjpeg_context* context) {
 
 }
 
+// Gather Huffman symbol statistics from the quantized (integer-valued) blocks.
+static void fjpeg_gather_stats(fjpeg_context* context, fjpeg_huffman_statistics_t* huff_stats) {
+    int last_dc_coeff[3] = {0, 0, 0};
+    fjpeg_coeff_t dct_block[64];
+    const int inc_xy = context->channels==1?8:16;
+    const int max_uv = context->channels==1?1:2;
+
+    memset(huff_stats, 0, sizeof(fjpeg_huffman_statistics_t));
+
+    for(int y = 0; y < context->padded_height; y+=inc_xy) {
+        for(int x = 0; x < context->padded_width; x+=inc_xy) {
+            for(int v = 0; v < max_uv; v++) {
+                for(int u = 0; u < max_uv; u++) {
+                    fjpeg_extract_coeff_8x8(context, dct_block, x+u*8, y+v*8, 0);
+                    last_dc_coeff[0] = fjpeg_entropy_stats(huff_stats, context, dct_block, 0, last_dc_coeff[0]);
+                }
+            }
+            if(context->channels==3) {
+                fjpeg_extract_coeff_8x8(context, dct_block, x>>1, y>>1, 1);
+                last_dc_coeff[1] = fjpeg_entropy_stats(huff_stats, context, dct_block, 1, last_dc_coeff[1]);
+
+                fjpeg_extract_coeff_8x8(context, dct_block, x>>1, y>>1, 2);
+                last_dc_coeff[2] = fjpeg_entropy_stats(huff_stats, context, dct_block, 2, last_dc_coeff[2]);
+            }
+        }
+    }
+}
+
+// Build all four optimal, length-limited Huffman tables from the statistics.
+static void fjpeg_generate_huffman_tables(fjpeg_context* context, fjpeg_huffman_statistics_t* huff_stats) {
+    memset(context->fjpeg_huffman_luma_dc, 0, sizeof(context->fjpeg_huffman_luma_dc));
+    memset(context->fjpeg_huffman_luma_ac, 0, sizeof(context->fjpeg_huffman_luma_ac));
+    memset(context->fjpeg_huffman_chroma_dc, 0, sizeof(context->fjpeg_huffman_chroma_dc));
+    memset(context->fjpeg_huffman_chroma_ac, 0, sizeof(context->fjpeg_huffman_chroma_ac));
+
+    context->fjpeg_short_huffman_luma_dc = fjpeg_generate_huffman_from_stats(context->fjpeg_huffman_luma_dc, huff_stats->luma_dc, 12);
+    context->fjpeg_short_huffman_luma_ac = fjpeg_generate_huffman_from_stats(context->fjpeg_huffman_luma_ac, huff_stats->luma_ac, 256);
+    context->fjpeg_short_huffman_chroma_dc = fjpeg_generate_huffman_from_stats(context->fjpeg_huffman_chroma_dc, huff_stats->chroma_dc, 12);
+    context->fjpeg_short_huffman_chroma_ac = fjpeg_generate_huffman_from_stats(context->fjpeg_huffman_chroma_ac, huff_stats->chroma_ac, 256);
+}
+
+// Re-quantize every block with the rate-distortion trellis, writing the chosen
+// integer coefficients back into the DCT arrays.
+static void fjpeg_run_trellis(fjpeg_context* context) {
+    fjpeg_coeff_t in_block[64];
+    fjpeg_coeff_t out_block[64];
+    const int inc_xy = context->channels==1?8:16;
+    const int max_uv = context->channels==1?1:2;
+
+    for(int y = 0; y < context->padded_height; y+=inc_xy) {
+        for(int x = 0; x < context->padded_width; x+=inc_xy) {
+            for(int v = 0; v < max_uv; v++) {
+                for(int u = 0; u < max_uv; u++) {
+                    fjpeg_extract_coeff_8x8(context, in_block, x+u*8, y+v*8, 0);
+                    fjpeg_trellis_quant_block(context, in_block, context->fjpeg_huffman_luma_ac, 0, out_block);
+                    fjpeg_store_coeff_8x8(context, out_block, x+u*8, y+v*8, 0);
+                }
+            }
+            if(context->channels==3) {
+                fjpeg_extract_coeff_8x8(context, in_block, x>>1, y>>1, 1);
+                fjpeg_trellis_quant_block(context, in_block, context->fjpeg_huffman_chroma_ac, 1, out_block);
+                fjpeg_store_coeff_8x8(context, out_block, x>>1, y>>1, 1);
+
+                fjpeg_extract_coeff_8x8(context, in_block, x>>1, y>>1, 2);
+                fjpeg_trellis_quant_block(context, in_block, context->fjpeg_huffman_chroma_ac, 2, out_block);
+                fjpeg_store_coeff_8x8(context, out_block, x>>1, y>>1, 2);
+            }
+        }
+    }
+}
+
 // Generate jpeg header
 bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
     
@@ -233,43 +304,19 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
         stream->writeBits(i==0?0:1, 8); // Quant table
     }
 
-    // Calculate huffman statistics
-    int last_dc_coeff[3] = {0, 0, 0};
-    fjpeg_coeff_t dct_block[64];
-    const int inc_xy = context->channels==1?8:16;
-    const int max_uv = context->channels==1?1:2;
+    // Calculate huffman statistics and generate the optimal tables.
     fjpeg_huffman_statistics_t huff_stats;
+    fjpeg_gather_stats(context, &huff_stats);
+    fjpeg_generate_huffman_tables(context, &huff_stats);
 
-    memset(&huff_stats, 0, sizeof(fjpeg_huffman_statistics_t));
-
-    for(int y = 0; y < context->padded_height; y+=inc_xy) {
-        for(int x = 0; x < context->padded_width; x+=inc_xy) {
-            for(int v = 0; v < max_uv; v++) {
-                for(int u = 0; u < max_uv; u++) {
-                    fjpeg_extract_coeff_8x8(context, dct_block, x+u*8, y+v*8, 0);
-                    last_dc_coeff[0] = fjpeg_entropy_stats(&huff_stats, context, dct_block, 0, last_dc_coeff[0]);                     
-                }
-            }
-            if(context->channels==3) {
-                fjpeg_extract_coeff_8x8(context, dct_block, x>>1, y>>1, 1);   
-                last_dc_coeff[1] = fjpeg_entropy_stats(&huff_stats, context, dct_block, 1, last_dc_coeff[1]);
-
-                fjpeg_extract_coeff_8x8(context, dct_block, x>>1, y>>1, 2);
-                last_dc_coeff[2] = fjpeg_entropy_stats(&huff_stats, context, dct_block, 2, last_dc_coeff[2]);
-            }
-        }
+    // Optional rate-distortion optimized re-quantization. The trellis uses the
+    // first-pass tables as a rate model, then the tables are rebuilt from the
+    // chosen coefficients so the bitstream stays consistent.
+    if(context->trellis_lambda > 0.0f) {
+        fjpeg_run_trellis(context);
+        fjpeg_gather_stats(context, &huff_stats);
+        fjpeg_generate_huffman_tables(context, &huff_stats);
     }
-    // Generate optimal, length-limited Huffman tables for every table from the
-    // gathered statistics instead of using the generic default tables.
-    memset(context->fjpeg_huffman_luma_dc, 0, sizeof(context->fjpeg_huffman_luma_dc));
-    memset(context->fjpeg_huffman_luma_ac, 0, sizeof(context->fjpeg_huffman_luma_ac));
-    memset(context->fjpeg_huffman_chroma_dc, 0, sizeof(context->fjpeg_huffman_chroma_dc));
-    memset(context->fjpeg_huffman_chroma_ac, 0, sizeof(context->fjpeg_huffman_chroma_ac));
-
-    context->fjpeg_short_huffman_luma_dc = fjpeg_generate_huffman_from_stats(context->fjpeg_huffman_luma_dc, huff_stats.luma_dc, 12);
-    context->fjpeg_short_huffman_luma_ac = fjpeg_generate_huffman_from_stats(context->fjpeg_huffman_luma_ac, huff_stats.luma_ac, 256);
-    context->fjpeg_short_huffman_chroma_dc = fjpeg_generate_huffman_from_stats(context->fjpeg_huffman_chroma_dc, huff_stats.chroma_dc, 12);
-    context->fjpeg_short_huffman_chroma_ac = fjpeg_generate_huffman_from_stats(context->fjpeg_huffman_chroma_ac, huff_stats.chroma_ac, 256);
 
     int luma_dc_count = 0;
     int luma_ac_count = 0;
@@ -365,6 +412,12 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
     // Chroma from context->fjpeg_cbdct and context->fjpeg_crdct
 
     stream->avoidFF = true;
+
+    int last_dc_coeff[3] = {0, 0, 0};
+    fjpeg_coeff_t dct_block[64];
+    const int inc_xy = context->channels==1?8:16;
+    const int max_uv = context->channels==1?1:2;
+
     memset(&last_dc_coeff, 0, sizeof(last_dc_coeff));
     
     for(int y = 0; y < context->padded_height; y+=inc_xy) {
@@ -417,6 +470,8 @@ void fjpeg_print_usage() {
     printf("  -q <quality>  Set quality factor (1-100)\r\n");
     printf("  -r <width>x<height>  Set resolution\r\n");
     printf("  -o <output_filename>  Output JPEG file\r\n");
+    printf("  -t  Enable rate-distortion optimized (trellis) quantization\r\n");
+    printf("  -l <lambda>  Set trellis Lagrange multiplier (default 0.01)\r\n");
     printf("  -d  Decode JPEG file\r\n");
     printf("  -h  Show help\r\n");
 }

@@ -50,6 +50,7 @@ int main(int argc, char** argv) {
     int width = 0;
     int height = 0;
     bool encode = true;
+    float trellis_lambda = 0.0f;
 
     // Parse filename, quality and resolution
     for(int i = 1; i < argc; i++) {
@@ -104,6 +105,22 @@ int main(int argc, char** argv) {
                 output_filename = argv[i+1];
             } else {
                 fprintf(stderr, "Error: Missing output filename\n");
+                return 1;
+            }
+            i++;
+        }
+        else if(strcmp(argv[i], "-t") == 0) {
+            trellis_lambda = 0.01f;
+        }
+        else if(strcmp(argv[i], "-l") == 0) {
+            if(i+1 < argc) {
+                trellis_lambda = (float)atof(argv[i+1]);
+                if(trellis_lambda <= 0.0f) {
+                    fprintf(stderr, "Error: Invalid trellis lambda\n");
+                    return 1;
+                }
+            } else {
+                fprintf(stderr, "Error: Missing trellis lambda\n");
                 return 1;
             }
             i++;
@@ -167,6 +184,7 @@ int main(int argc, char** argv) {
     }
 
     context->setQuality(quality);
+    context->trellis_lambda = trellis_lambda;
 
     // Calculate time
     auto start = std::chrono::high_resolution_clock::now();

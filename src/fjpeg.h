@@ -48,6 +48,7 @@ class fjpeg_context {
     int padded_height;
     int quality;
     int channels;
+    float trellis_lambda; // > 0 enables rate-distortion optimized quantization
 
     // For decoding
     int bpp;
@@ -97,6 +98,7 @@ class fjpeg_context {
         padded_height = 0;
         quality = 0;
         channels = 3;
+        trellis_lambda = 0.0f;
         memset(fjpeg_luminance_quantization_table, 0, 64);
         memset(fjpeg_chrominance_quantization_table, 0, 64);
         memset(fjpeg_huffman_luma_dc, 0, 16 * sizeof(fjpeg_huffman_table_t));
