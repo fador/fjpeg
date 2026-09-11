@@ -44,6 +44,8 @@ class fjpeg_context {
     FILE* output;
     int width;
     int height;
+    int padded_width;
+    int padded_height;
     int quality;
     int channels;
 
@@ -91,6 +93,8 @@ class fjpeg_context {
         output = nullptr;
         width = 0;
         height = 0;
+        padded_width = 0;
+        padded_height = 0;
         quality = 0;
         channels = 3;
         memset(fjpeg_luminance_quantization_table, 0, 64);
@@ -169,13 +173,22 @@ class fjpeg_context {
         this->width = width;
         this->height = height;
 
+        // Pad dimensions up to the 4:2:0 MCU size so edge blocks stay in bounds.
+        // Edge blocks are filled by replicating the last row/column on read.
+        this->padded_width = (width + 15) & ~15;
+        this->padded_height = (height + 15) & ~15;
+
         fjpeg_y = (fjpeg_pixel_t*)malloc(width * height * sizeof(fjpeg_pixel_t));
         fjpeg_cb = (fjpeg_pixel_t*)malloc(width * height * sizeof(fjpeg_pixel_t));
         fjpeg_cr = (fjpeg_pixel_t*)malloc(width * height * sizeof(fjpeg_pixel_t));
 
-        fjpeg_ydct = (fjpeg_coeff_t*)malloc(width * height * sizeof(fjpeg_coeff_t));
-        fjpeg_cbdct = (fjpeg_coeff_t*)malloc(width * height * sizeof(fjpeg_coeff_t));
-        fjpeg_crdct = (fjpeg_coeff_t*)malloc(width * height * sizeof(fjpeg_coeff_t));
+        fjpeg_ydct = (fjpeg_coeff_t*)malloc(padded_width * padded_height * sizeof(fjpeg_coeff_t));
+        fjpeg_cbdct = (fjpeg_coeff_t*)malloc(padded_width * padded_height * sizeof(fjpeg_coeff_t));
+        fjpeg_crdct = (fjpeg_coeff_t*)malloc(padded_width * padded_height * sizeof(fjpeg_coeff_t));
+
+        memset(fjpeg_ydct, 0, padded_width * padded_height * sizeof(fjpeg_coeff_t));
+        memset(fjpeg_cbdct, 0, padded_width * padded_height * sizeof(fjpeg_coeff_t));
+        memset(fjpeg_crdct, 0, padded_width * padded_height * sizeof(fjpeg_coeff_t));
 
         fread(fjpeg_y, 1, width * height, input);
         fread(fjpeg_cb, 1, (width * height) >> 2, input);

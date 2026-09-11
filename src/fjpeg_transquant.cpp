@@ -58,10 +58,15 @@ fjpeg_pixel_t* fjpeg_extract_8x8(fjpeg_context* context, fjpeg_pixel_t* output, 
 
     fjpeg_pixel_t* image = channel==0?context->fjpeg_y:channel==1?context->fjpeg_cb:context->fjpeg_cr;
     const int input_width = channel==0?context->width:context->width/2;
+    const int input_height = channel==0?context->height:context->height/2;
 
     for (int j = 0; j < 8; j++) {
+        int sy = y + j;
+        if (sy >= input_height) sy = input_height - 1; // replicate bottom edge
         for (int i = 0; i < 8; i++) {
-            output[j * 8 + i] = image[(y + j) * input_width  + (x + i)];
+            int sx = x + i;
+            if (sx >= input_width) sx = input_width - 1; // replicate right edge
+            output[j * 8 + i] = image[sy * input_width + sx];
         }
     }
     return output;
@@ -70,7 +75,7 @@ fjpeg_pixel_t* fjpeg_extract_8x8(fjpeg_context* context, fjpeg_pixel_t* output, 
 fjpeg_coeff_t* fjpeg_extract_coeff_8x8(fjpeg_context* context, fjpeg_coeff_t* output, int x, int y, int channel) {    
 
     fjpeg_coeff_t* image = channel==0?context->fjpeg_ydct:channel==1?context->fjpeg_cbdct:context->fjpeg_crdct;
-    const int input_width = channel==0?context->width:context->width/2;
+    const int input_width = channel==0?context->padded_width:context->padded_width/2;
 
     for (int j = 0; j < 8; j++) {
         for (int i = 0; i < 8; i++) {
@@ -83,7 +88,7 @@ fjpeg_coeff_t* fjpeg_extract_coeff_8x8(fjpeg_context* context, fjpeg_coeff_t* ou
 bool fjpeg_store_coeff_8x8(fjpeg_context* context, fjpeg_coeff_t* input, int x, int y, int channel) {
 
     fjpeg_coeff_t* image = channel==0?context->fjpeg_ydct:channel==1?context->fjpeg_cbdct:context->fjpeg_crdct;
-    const int input_width = channel==0?context->width:context->width/2;
+    const int input_width = channel==0?context->padded_width:context->padded_width/2;
 
     for (int j = 0; j < 8; j++) {
         for (int i = 0; i < 8; i++) {
@@ -170,8 +175,8 @@ bool fjpeg_transquant_input(fjpeg_context* context) {
     fjpeg_coeff_t dct_block[64];
     fjpeg_coeff_t dct_block2[64];
     
-    for(int y = 0; y < context->height; y+=8) {
-        for(int x = 0; x < context->width; x+=8) {
+    for(int y = 0; y < context->padded_height; y+=8) {
+        for(int x = 0; x < context->padded_width; x+=8) {
             fjpeg_extract_8x8(context, cur_block, x, y, 0);
             fjpeg_dct8x8(context, cur_block, dct_block);
             fjpeg_quant8x8(context, dct_block,dct_block2, 0);
@@ -191,8 +196,8 @@ bool fjpeg_transquant_input(fjpeg_context* context) {
     }
 
     if(context->channels == 3) {
-        for(int y = 0; y < context->height/2; y+=8) {
-            for(int x = 0; x < context->width/2; x+=8) {
+        for(int y = 0; y < context->padded_height/2; y+=8) {
+            for(int x = 0; x < context->padded_width/2; x+=8) {
                 fjpeg_extract_8x8(context, cur_block, x, y, 1);
                 fjpeg_dct8x8(context, cur_block, dct_block);
                 fjpeg_quant8x8(context, dct_block,dct_block2, 1);
@@ -201,8 +206,8 @@ bool fjpeg_transquant_input(fjpeg_context* context) {
             }
         }
 
-        for(int y = 0; y < context->height/2; y+=8) {
-            for(int x = 0; x < context->width/2; x+=8) {
+        for(int y = 0; y < context->padded_height/2; y+=8) {
+            for(int x = 0; x < context->padded_width/2; x+=8) {
                 fjpeg_extract_8x8(context, cur_block, x, y, 2);
                 fjpeg_dct8x8(context, cur_block, dct_block);
                 fjpeg_quant8x8(context, dct_block,dct_block2, 2);

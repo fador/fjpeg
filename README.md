@@ -139,8 +139,8 @@ test machine.
 * Baseline sequential JPEG only; no progressive, lossless, or arithmetic
   JPEG output.
 * Raw YUV 4:2:0 input only; there is no color-space conversion or file-format
-  handling. Width and height should be multiples of 16 (the 4:2:0 MCU size);
-  edge blocks are not padded.
+  handling. Width and height must be even; edge blocks for non-MCU-aligned
+  dimensions are handled by replicating the last row/column.
 * Error handling is minimal, as befits an educational implementation.
 
 **License**

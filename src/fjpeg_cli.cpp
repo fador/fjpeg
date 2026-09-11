@@ -137,6 +137,10 @@ int main(int argc, char** argv) {
         fjpeg_print_usage();
         return 1;
     }
+    if(encode && ((width & 1) || (height & 1))) {
+        fprintf(stderr, "Error: Width and height must be even for 4:2:0 input\n");
+        return 1;
+    }
 
     // Time measurement
     int64_t time_input_read_ms = 0;

@@ -242,8 +242,8 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
 
     memset(&huff_stats, 0, sizeof(fjpeg_huffman_statistics_t));
 
-    for(int y = 0; y < context->height; y+=inc_xy) {
-        for(int x = 0; x < context->width; x+=inc_xy) {
+    for(int y = 0; y < context->padded_height; y+=inc_xy) {
+        for(int x = 0; x < context->padded_width; x+=inc_xy) {
             for(int v = 0; v < max_uv; v++) {
                 for(int u = 0; u < max_uv; u++) {
                     fjpeg_extract_coeff_8x8(context, dct_block, x+u*8, y+v*8, 0);
@@ -367,8 +367,8 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
     stream->avoidFF = true;
     memset(&last_dc_coeff, 0, sizeof(last_dc_coeff));
     
-    for(int y = 0; y < context->height; y+=inc_xy) {
-        for(int x = 0; x < context->width; x+=inc_xy) {
+    for(int y = 0; y < context->padded_height; y+=inc_xy) {
+        for(int x = 0; x < context->padded_width; x+=inc_xy) {
 
             for(int v = 0; v < max_uv; v++) {
                 for(int u = 0; u < max_uv; u++) {
