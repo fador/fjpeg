@@ -69,9 +69,6 @@ static inline int fjpeg_round(float x) {
 #define FJPEG_BLOCK_SIZE 8
 
 
-#define FJPEG_Q_FACTOR_SCALE 50
-
-
 typedef struct {
     uint8_t bits[16]; // BITS
     uint8_t val[163]; // HUFFVAL

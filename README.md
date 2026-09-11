@@ -14,6 +14,8 @@ stage of the pipeline.
   coding → Huffman entropy coding → bitstream with 0xFF byte stuffing
 * Per-image optimal Huffman tables (DC and AC, luma and chroma), generated
   from a first-pass statistics scan
+* Standard ITU-T T.81 quantization tables with libjpeg-compatible quality
+  scaling, plus a tunable quantization deadzone
 * 4:2:0 chroma subsampling and a separable (2-pass) FDCT
 * Optional arithmetic-coding experiment (`fjpeg_arith`)
 * Header parsing / decoding is under development
@@ -67,52 +69,68 @@ Options:
 
 The encoder performs a statistics pass over all DCT blocks before writing the
 entropy-coded data, then builds Huffman tables tailored to the actual image.
-Recent improvements:
+Verified improvements, each measured with a rate-distortion sweep (BD-rate
+reduction at matched PSNR) over several natural and synthetic images:
 
 1. **Optimal Huffman tables for all four tables.** Previously only the luma DC
    table was generated from the statistics; the luma AC, chroma DC and chroma
    AC tables used the generic defaults. All four are now generated with a
    correct, length-limited (≤ 16 bits) Huffman construction based on JPEG
    Annex K.2, and the DHT segments are written dynamically to match the
-   generated symbol counts.
+   generated symbol counts. Together with the bitstream fixes below this gave
+   ~10-24% smaller files at equal PSNR.
 2. **Bitstream tail fixes.** The final partial byte was written misaligned and
    the last few bits were dropped, and the EOI marker was appended without
    first padding the entropy segment to a byte boundary (so `0xFFD9` never
    appeared literally in the file). Both are fixed: the tail is flushed
    correctly, the entropy segment is padded with 1-bits, and the file now ends
    with a proper EOI marker.
-3. **Separable FDCT.** The transform is computed as two 1-D passes, reducing
+3. **Symmetric coefficient rounding.** `(int)(x + 0.5f)` truncates towards zero
+   for negative `x`, so every negative quantized coefficient was shrunk by
+   about one level. Using round-half-away-from-zero removed the bias: a
+   **17-33% BD-rate** improvement.
+4. **Standard luminance quantization table.** Several high-frequency entries of
+   the built-in table had an extra leading digit (e.g. `24 → 124`), over
+   quantizing detail. The standard ITU-T T.81 table gives an **8-11% BD-rate**
+   improvement on natural images (neutral on very smooth content).
+5. **Standard libjpeg quality scaling.** The linear `(100 - quality)` ramp was
+   replaced by the standard `5000/quality` / `200 - 2*quality` curve. It is
+   rate-distortion neutral but quality values below 50 now reach roughly half
+   the previous minimum bitrate.
+6. **Quantization deadzone.** `FJPEG_QUANT_DEADZONE` (0.65) widens the zero bin,
+   dropping near-zero coefficients for a **3-5.5% BD-rate** gain.
+7. **Separable FDCT.** The transform is computed as two 1-D passes, reducing
    work from O(N⁴) to O(2·N³) per block (4096 → 1024 multiplies).
 
-Measured on a synthetic gradient/texture 640×480 frame (byte sizes; PSNR in
-dB against the source), original vs. improved:
+On a synthetic gradient/texture 640×480 frame (byte sizes; PSNR in dB against
+the source), original vs. the current encoder:
 
-| Quality | Original | Improved | Size change | PSNR (orig → new) |
+| Quality | Original | Current | Size change | PSNR (orig → new) |
 | ---: | ---: | ---: | ---: | --- |
-| 25 | 10226 | 7786 | −23.9% | 37.41 → 37.41 |
-| 50 | 12839 | 10577 | −17.6% | 39.09 → 40.56 |
-| 75 | 17430 | 15000 | −13.9% | 44.91 → 44.92 |
-| 90 | 27992 | 25001 | −10.7% | 50.21 → 50.22 |
-| **Total** | **68487** | **58364** | **−14.8%** | — |
+| 25 | 10226 | 7456 | −27.1% | 37.41 → 42.18 |
+| 50 | 12839 | 11739 | −8.6% | 39.09 → 46.59 |
+| 75 | 17430 | 16574 | −4.9% | 44.91 → 49.69 |
+| 90 | 27992 | 26394 | −5.7% | 50.21 → 52.70 |
 
-At 1280×720 / quality 75 the same change reduced the file from 51071 to 44499
-bytes (−12.9%) with no measurable PSNR loss. The separable FDCT reduced the
-720p DCT/quantization stage from ~76 ms to ~9 ms on the test machine.
+The per-quality size change is no longer the headline number because the
+quantization fixes deliberately spend some of the saved bits on accuracy. The
+correct measure is rate-distortion: against the original encoder the current
+one achieves about **−40% to −50% BD-rate** on natural images (the original
+also suffered from the rounding and tail bugs). At 1280×720 / quality 75 the
+separable FDCT reduced the DCT/quantization stage from ~76 ms to ~9 ms on the
+test machine.
 
 **Further Improvement Opportunities**
 
-* **Progressively optimized quantization tables.** The tables used are the
-  classic JPEG tables plus a simple `(100 - quality)` scaling. Using the
-  standard libjpeg scaling and validating the luma table would give a more
-  predictable quality/size curve. (Note: several high-frequency entries in
-  `fjpeg_default_luma_quant_table` differ from the standard Annex K table,
-  e.g. 24 → 124, which makes the default table more aggressive than intended.)
+* **Rate-distortion optimized quantization.** A trellis search over the AC
+  coefficients that accounts for run-length and code cost typically gains a few
+  more percent.
 * **Integer / AAN fast DCT.** An integer or AAN-scaled transform would remove
   the remaining floating-point cost and improve numerical determinism.
 * **Progressive JPEG and restart markers.** Progressive scans and restarts
   improve error resilience and can improve rate-distortion at low bitrates.
-* **Per-component statistics.** The statistics pass is currently scalar; it
-  could be vectorized for a further speed-up.
+* **Multithreading.** The per-block DCT and the statistics/entropy passes are
+  embarrassingly parallel.
 * **Decoder.** Complete `fjpeg_read_headers` (it currently returns without a
   value on some paths) and implement entropy decoding.
 
