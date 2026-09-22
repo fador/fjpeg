@@ -22,7 +22,7 @@ stage of the pipeline.
   scaling, plus a tunable quantization deadzone
 * 4:2:0 chroma subsampling and a separable (2-pass) FDCT
 * Optional arithmetic-coding experiment (`fjpeg_arith`)
-* Header parsing / decoding is under development
+* Baseline and progressive JPEG decoding back to raw YUV 4:2:0
 
 **Building**
 
@@ -42,7 +42,15 @@ On single-config generators (Make/Ninja) it is `build/fjpeg`.
 # input.yuv must be raw YUV 4:2:0, width*height Y bytes
 # followed by (width*height)/4 Cb and (width*height)/4 Cr bytes
 ./fjpeg -i input.yuv -r 1280x720 -q 70 -o output.jpg
+
+# decode a baseline or progressive JPEG back to raw YUV 4:2:0
+./fjpeg -d -i input.jpg -o output.yuv
 ```
+
+The decoder accepts sequential (SOF0) and progressive (SOF2) 8-bit JPEGs,
+including progressive DC and AC successive approximation. The resolution is
+taken from the JPEG headers; the output is raw YUV with each component stored
+at its own sampling resolution (Y plane, then Cb, then Cr for 4:2:0).
 
 Options:
 
@@ -54,7 +62,7 @@ Options:
 -t                     enable rate-distortion optimized (trellis) quantization
 -l <lambda>            trellis Lagrange multiplier (default 0.01)
 -p                     write a progressive JPEG
--d                     decode an existing JPEG (work in progress)
+-d                     decode an existing JPEG (baseline or progressive)
 -h                     show help
 ```
 
@@ -62,7 +70,7 @@ Options:
 
 | File | Purpose |
 | --- | --- |
-| `src/fjpeg.cpp` | JPEG header generation/parsing, encode loop, CLI usage text |
+| `src/fjpeg.cpp` | JPEG header generation, encode loop, CLI usage text |
 | `src/fjpeg.h` | `fjpeg_context`, quality scaling, input loading |
 | `src/fjpeg_transquant.cpp` | block extraction, FDCT/IDCT, quantization, zigzag, trellis |
 | `src/fjpeg_huffman.cpp` | statistics pass, optimal Huffman generation, entropy coding |
@@ -70,6 +78,7 @@ Options:
 | `src/fjpeg_bitstream.h` | bit reader/writer, 0xFF stuffing, file flushing |
 | `src/fjpeg_global.h` | types, default quantization tables, zigzag tables |
 | `src/fjpeg_huffman.h` | default Huffman tables and statistics struct |
+| `src/fjpeg_decode.cpp` | JPEG header parsing, entropy decoding, IDCT, YUV output |
 | `src/fjpeg_cli.cpp` | command line parsing and program flow |
 | `src/fjpeg_arith.cpp` | experimental arithmetic coder (standalone test) |
 
@@ -178,8 +187,8 @@ statistics are no longer shared.
   progressive streams.
 * **Multithreading.** The per-block DCT and the statistics/entropy passes are
   embarrassingly parallel.
-* **Decoder.** Complete `fjpeg_read_headers` (it currently returns without a
-  value on some paths) and implement entropy decoding.
+* **Decoder color handling.** The decoder emits raw YUV 4:2:0 only; a color
+  conversion and an image container format would make it directly viewable.
 
 **Limitations**
 

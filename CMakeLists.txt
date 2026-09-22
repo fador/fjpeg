@@ -9,7 +9,7 @@ set(CMAKE_CXX_STANDARD 11)
 include_directories(src)
 
 # Add the source file(s) to the project
-list(APPEND SOURCE_FILES src/fjpeg.cpp src/fjpeg_transquant.cpp src/fjpeg_huffman.cpp src/fjpeg_progressive.cpp )
+list(APPEND SOURCE_FILES src/fjpeg.cpp src/fjpeg_transquant.cpp src/fjpeg_huffman.cpp src/fjpeg_progressive.cpp src/fjpeg_decode.cpp )
 list(APPEND SOURCE_FILES_CLI src/fjpeg_cli.cpp)
 
 # Create a static library

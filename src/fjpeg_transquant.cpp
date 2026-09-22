@@ -140,7 +140,8 @@ fjpeg_pixel_t* fjpeg_idct8x8(fjpeg_context* context, fjpeg_coeff_t* block, fjpeg
                     sum += cu * cv * block[v*FJPEG_BLOCK_SIZE+u] * context->precalc_cos[x][u]  * context->precalc_cos[y][v] ;
                 }
             }
-            out[y*FJPEG_BLOCK_SIZE+x] = (fjpeg_pixel_t)((0.25f * sum)+128.0f);  // Apply constant factor
+            float val = (0.25f * sum) + 128.0f;  // Apply constant factor
+            out[y*FJPEG_BLOCK_SIZE+x] = (fjpeg_pixel_t)FJPEG_CLAMP((int)lroundf(val), 0, 255);
         }
     }
     return out;

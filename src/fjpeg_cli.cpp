@@ -172,19 +172,9 @@ int main(int argc, char** argv) {
     fjpeg_context* context = new fjpeg_context();
 
     if(!encode) {
-        FILE* fp = fopen(input_filename.c_str(), "rb");
-        if(!fp) {
-            fprintf(stderr, "Error: Unable to open input file\n");
-            return 1;
-        }
-        fjpeg_bitstream* stream = new fjpeg_bitstream(fp);
-        if(!fjpeg_read_headers(stream, context)) {
-            fprintf(stderr, "Error: Unable to read headers\n");
-            return 1;
-        }
-        fclose(fp);
-        delete stream;
-        exit(0);
+        bool ok = fjpeg_decode_file(input_filename.c_str(), output_filename.c_str());
+        delete context;
+        return ok ? 0 : 1;
     }
 
     context->setQuality(quality);
