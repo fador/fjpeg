@@ -57,6 +57,10 @@ typedef float fjpeg_coeff_t;
 #define FJPEG_QUANT_DEADZONE 0.65f
 #endif
 
+static inline int fjpeg_round_dc(float x) {
+    return (x >= 0.0f) ? (int)(x + 0.5f) : (int)(x - 0.5f);
+}
+
 static inline int fjpeg_round(float x) {
     float ax = (x < 0.0f) ? -x : x;
     if (ax < FJPEG_QUANT_DEADZONE) {
@@ -71,7 +75,7 @@ static inline int fjpeg_round(float x) {
 
 typedef struct {
     uint8_t bits[16]; // BITS
-    uint8_t val[163]; // HUFFVAL
+    uint8_t val[257]; // HUFFVAL
 } fjpeg_short_huffman_table_t;
 
 typedef struct {

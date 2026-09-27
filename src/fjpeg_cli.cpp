@@ -111,7 +111,7 @@ int main(int argc, char** argv) {
             i++;
         }
         else if(strcmp(argv[i], "-t") == 0) {
-            trellis_lambda = 0.01f;
+            trellis_lambda = 0.007f;
         }
         else if(strcmp(argv[i], "-p") == 0) {
             progressive = true;

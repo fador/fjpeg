@@ -196,7 +196,7 @@ void fjpeg_trellis_quant_block(fjpeg_context* context, const fjpeg_coeff_t* bloc
     const float zrl_rate = (float)fjpeg_huff_symbol_len(huff_ac, 0xF0);
 
     // DC is coded independently of the AC run lengths, so round it as usual.
-    out[0] = (fjpeg_coeff_t)fjpeg_round(block[0]);
+    out[0] = (fjpeg_coeff_t)fjpeg_round_dc(block[0]);
 
     // The reconstruction error is Q^2 * (c - n)^2, so weight the distortion by
     // the squared quantization step. The coefficients are in zigzag order.
@@ -240,7 +240,7 @@ void fjpeg_trellis_quant_block(fjpeg_context* context, const fjpeg_coeff_t* bloc
     memset(from, 0, sizeof(from));
 
     // Terminating before any AC coefficient (all-zero block).
-    float best = suffix[1] + eob_rate;
+    float best = suffix[1] + lambda * eob_rate;
     int best_p = 0;
     int best_r = 0;
 
@@ -262,7 +262,7 @@ void fjpeg_trellis_quant_block(fjpeg_context* context, const fjpeg_coeff_t* bloc
                 nr = r + 1;
             } else {
                 nr = 0;
-                nc += zrl_rate; // a full run of 16 zeros emits ZRL
+                nc += lambda * zrl_rate; // a full run of 16 zeros emits ZRL
             }
             if (nc < cur[nr]) {
                 cur[nr] = nc;
@@ -279,15 +279,25 @@ void fjpeg_trellis_quant_block(fjpeg_context* context, const fjpeg_coeff_t* bloc
         if (nearest > 0) {
             int sign = cv < 0.0f ? -1 : 1;
             int nearest_size = fjpeg_coeff_size(nearest);
-            int cand[3];
+            int cand[12];
             int ncand = 0;
-            cand[ncand++] = sign * nearest;
-            if (nearest_size > 1) {
-                cand[ncand++] = sign * ((1 << (nearest_size - 1)) - 1);
+            auto add_cand = [&](int v) {
+                if (v <= 0) return;
+                for (int i = 0; i < ncand; i++) {
+                    if (cand[i] == sign * v) return;
+                }
+                cand[ncand++] = sign * v;
+            };
+
+            add_cand(nearest);
+            int fl = (int)av;
+            add_cand(fl);
+            add_cand(fl + 1);
+            add_cand(nearest - 1);
+            for (int s = 1; s < nearest_size; s++) {
+                add_cand((1 << s) - 1);
             }
-            if (nearest_size < 10) {
-                cand[ncand++] = sign * (1 << nearest_size);
-            }
+
             for (int ci = 0; ci < ncand; ci++) {
                 int n = cand[ci];
                 int sz = fjpeg_coeff_size(n);
@@ -311,7 +321,7 @@ void fjpeg_trellis_quant_block(fjpeg_context* context, const fjpeg_coeff_t* bloc
             if (cur[r] >= INF) continue;
             float term = cur[r] + suffix[p + 1];
             if (p < ZIGZAG_COUNT - 1 || r > 0) {
-                term += eob_rate;
+                term += lambda * eob_rate;
             }
             if (term < best) {
                 best = term;
@@ -336,6 +346,149 @@ void fjpeg_trellis_quant_block(fjpeg_context* context, const fjpeg_coeff_t* bloc
         int pr = from[p][r];
         p--;
         r = pr;
+    }
+}
+
+// Joint rate-distortion optimized (Viterbi trellis) quantization of DC coefficients across all blocks.
+void fjpeg_trellis_quant_dc(fjpeg_context* context) {
+    if (context->trellis_lambda <= 0.0f) {
+        return;
+    }
+
+    const int total_channels = context->channels;
+    for (int channel = 0; channel < total_channels; channel++) {
+        fjpeg_coeff_t* image = (channel == 0) ? context->fjpeg_ydct
+                             : (channel == 1) ? context->fjpeg_cbdct
+                                              : context->fjpeg_crdct;
+        const int input_width = (channel == 0) ? context->padded_width : context->padded_width / 2;
+        const uint8_t* qtab = (channel == 0) ? context->fjpeg_luminance_quantization_table
+                                             : context->fjpeg_chrominance_quantization_table;
+        const fjpeg_huffman_table_t* huff_dc = (channel == 0) ? context->fjpeg_huffman_luma_dc
+                                                              : context->fjpeg_huffman_chroma_dc;
+
+        const float q0 = (float)qtab[0];
+        const float w0 = q0 * q0;
+
+        // Collect all block (x, y) coordinates in sequential entropy-coding order
+        std::vector<int> block_offsets;
+        if (channel == 0) {
+            const int inc_xy = (context->channels == 1) ? 8 : 16;
+            const int max_uv = (context->channels == 1) ? 1 : 2;
+            for (int y = 0; y < context->padded_height; y += inc_xy) {
+                for (int x = 0; x < context->padded_width; x += inc_xy) {
+                    for (int v = 0; v < max_uv; v++) {
+                        for (int u = 0; u < max_uv; u++) {
+                            block_offsets.push_back((y + v * 8) * input_width + (x + u * 8));
+                        }
+                    }
+                }
+            }
+        } else {
+            for (int y = 0; y < context->padded_height; y += 16) {
+                for (int x = 0; x < context->padded_width; x += 16) {
+                    block_offsets.push_back((y >> 1) * input_width + (x >> 1));
+                }
+            }
+        }
+
+        const size_t n_blocks = block_offsets.size();
+        if (n_blocks == 0) continue;
+
+        // Calculate mean weight for scaling lambda
+        float mean_weight = 0.0f;
+        for (int p = 0; p < 64; p++) {
+            float q = (float)qtab[p];
+            mean_weight += q * q;
+        }
+        mean_weight /= 64.0f;
+        const float lambda = context->trellis_lambda * mean_weight;
+
+        // For each block, generate candidates around fjpeg_round(orig_dc)
+        const int MAX_CAND = 5;
+        std::vector<int> cand_val(n_blocks * MAX_CAND, 0);
+
+        for (size_t i = 0; i < n_blocks; i++) {
+            float orig = image[block_offsets[i]];
+            int near_val = fjpeg_round_dc(orig);
+            int vals[MAX_CAND] = { near_val, near_val - 1, near_val + 1, near_val - 2, near_val + 2 };
+            for (int c = 0; c < MAX_CAND; c++) {
+                cand_val[i * MAX_CAND + c] = vals[c];
+            }
+        }
+
+        // Viterbi dynamic programming
+        const float INF = 1.0e30f;
+        std::vector<float> prev_cost(MAX_CAND, 0.0f);
+        std::vector<float> cur_cost(MAX_CAND, INF);
+        std::vector<uint8_t> from_idx(n_blocks * MAX_CAND, 0);
+
+        // Block 0: predecessor is 0
+        float orig0 = image[block_offsets[0]];
+        for (int c = 0; c < MAX_CAND; c++) {
+            int val = cand_val[c];
+            float diff_orig = orig0 - (float)val;
+            float dist = w0 * diff_orig * diff_orig;
+            int diff_pred = val - 0;
+            int sz = fjpeg_coeff_size(diff_pred);
+            float rate = (float)fjpeg_huff_symbol_len(huff_dc, sz) + (float)sz;
+            prev_cost[c] = dist + lambda * rate;
+        }
+
+        // Blocks 1 .. n_blocks - 1
+        for (size_t i = 1; i < n_blocks; i++) {
+            float orig = image[block_offsets[i]];
+
+            for (int c = 0; c < MAX_CAND; c++) {
+                int val = cand_val[i * MAX_CAND + c];
+                float diff_orig = orig - (float)val;
+                float dist = w0 * diff_orig * diff_orig;
+
+                float best_c_cost = INF;
+                int best_p = 0;
+
+                for (int p = 0; p < MAX_CAND; p++) {
+                    int p_val = cand_val[(i - 1) * MAX_CAND + p];
+                    int diff_pred = val - p_val;
+                    int sz = fjpeg_coeff_size(diff_pred);
+                    float rate = (float)fjpeg_huff_symbol_len(huff_dc, sz) + (float)sz;
+                    float cost = prev_cost[p] + dist + lambda * rate;
+                    if (cost < best_c_cost) {
+                        best_c_cost = cost;
+                        best_p = p;
+                    }
+                }
+                cur_cost[c] = best_c_cost;
+                from_idx[i * MAX_CAND + c] = (uint8_t)best_p;
+            }
+
+            for (int c = 0; c < MAX_CAND; c++) {
+                prev_cost[c] = cur_cost[c];
+            }
+        }
+
+        // Backtrack best path
+        float min_final_cost = INF;
+        int best_last_c = 0;
+        for (int c = 0; c < MAX_CAND; c++) {
+            if (prev_cost[c] < min_final_cost) {
+                min_final_cost = prev_cost[c];
+                best_last_c = c;
+            }
+        }
+
+        std::vector<int> chosen_dc(n_blocks);
+        int cur_c = best_last_c;
+        for (int i = (int)n_blocks - 1; i >= 0; i--) {
+            chosen_dc[i] = cand_val[i * MAX_CAND + cur_c];
+            if (i > 0) {
+                cur_c = from_idx[i * MAX_CAND + cur_c];
+            }
+        }
+
+        // Write chosen DC coefficients back to image
+        for (size_t i = 0; i < n_blocks; i++) {
+            image[block_offsets[i]] = (fjpeg_coeff_t)chosen_dc[i];
+        }
     }
 }
 

@@ -1,0 +1,85 @@
+import subprocess, os, sys
+import numpy as np
+
+def bdrint(rate, dist):
+    p = np.polyfit(dist, np.log(rate), 3)
+    return np.polyint(p)
+
+def bd_rate(r1, d1, r2, d2):
+    min_d = max(min(d1), min(d2))
+    max_d = min(max(d1), max(d2))
+    if min_d >= max_d:
+        return 0.0
+    p1 = bdrint(r1, d1)
+    p2 = bdrint(r2, d2)
+    int1 = np.polyval(p1, max_d) - np.polyval(p1, min_d)
+    int2 = np.polyval(p2, max_d) - np.polyval(p2, min_d)
+    avg_diff = (int2 - int1) / (max_d - min_d)
+    return (np.exp(avg_diff) - 1.0) * 100.0
+
+def psnr(orig, dec):
+    mse = np.mean((orig.astype(np.float64) - dec.astype(np.float64))**2)
+    if mse == 0: return 99.99
+    return 10.0 * np.log10(255.0**2 / mse)
+
+def evaluate_image(yuv_file, width=640, height=480, fjpeg_bin='build/Release/fjpeg.exe'):
+    with open(yuv_file, 'rb') as f:
+        orig_y = np.frombuffer(f.read(width * height), dtype=np.uint8)
+    
+    qualities = [30, 50, 70, 85]
+    configs = [
+        ('baseline', []),
+        ('trellis', ['-t']),
+        ('progressive', ['-p']),
+        ('prog+trellis', ['-p', '-t']),
+    ]
+    
+    results = {}
+    for name, flags in configs:
+        rates = []
+        psnrs = []
+        for q in qualities:
+            jpg = f'tmp_{name}_{q}.jpg'
+            yuv_dec = f'tmp_{name}_{q}.yuv'
+            cmd = [fjpeg_bin, '-i', yuv_file, '-r', f'{width}x{height}', '-q', str(q), '-o', jpg] + flags
+            ret = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if ret.returncode != 0:
+                print(f"Error encoding {jpg}")
+                continue
+            sz = os.path.getsize(jpg)
+            
+            # decode with fjpeg
+            cmd_dec = [fjpeg_bin, '-d', '-i', jpg, '-o', yuv_dec]
+            subprocess.run(cmd_dec, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            with open(yuv_dec, 'rb') as f:
+                dec_y = np.frombuffer(f.read(width * height), dtype=np.uint8)
+            p = psnr(orig_y, dec_y)
+            rates.append(sz)
+            psnrs.append(p)
+            try:
+                os.remove(jpg)
+                os.remove(yuv_dec)
+            except:
+                pass
+        results[name] = (rates, psnrs)
+    
+    base_rates, base_psnrs = results['baseline']
+    print(f"\nResults for {yuv_file}:")
+    print(f"{'Config':<15} | {'q=30 (B / dB)':<18} | {'q=50 (B / dB)':<18} | {'q=70 (B / dB)':<18} | {'q=85 (B / dB)':<18} | {'BD-rate vs Base':<16}")
+    print("-" * 115)
+    for name, (rates, psnrs) in results.items():
+        q_strs = [f"{rates[i]} / {psnrs[i]:.2f}" for i in range(4)]
+        if name == 'baseline':
+            bd_str = "0.00% (ref)"
+        else:
+            bd = bd_rate(base_rates, base_psnrs, rates, psnrs)
+            bd_str = f"{bd:+.2f}%"
+        print(f"{name:<15} | {q_strs[0]:<18} | {q_strs[1]:<18} | {q_strs[2]:<18} | {q_strs[3]:<18} | {bd_str:<16}")
+    return results
+
+if __name__ == '__main__':
+    for img in ['test_grad_texture.yuv', 'test_natural.yuv', 'test_edges.yuv']:
+        if not os.path.exists(img):
+            import generate_test_images
+            generate_test_images.create_images()
+        evaluate_image(img)

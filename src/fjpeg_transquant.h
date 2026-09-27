@@ -46,4 +46,7 @@ void fjpeg_trellis_quant_block(fjpeg_context* context, const fjpeg_coeff_t* bloc
                                const fjpeg_huffman_table_t* huff_ac,
                                int channel, fjpeg_coeff_t* out);
 
+// Joint rate-distortion optimized (Viterbi trellis) quantization of DC coefficients across all blocks.
+void fjpeg_trellis_quant_dc(fjpeg_context* context);
+
 bool fjpeg_transquant_input(fjpeg_context* context);

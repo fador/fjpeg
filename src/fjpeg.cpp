@@ -128,8 +128,16 @@ void fjpeg_trellis_optimize(fjpeg_context* context) {
         return;
     }
     fjpeg_huffman_statistics_t stats;
+    // Pass 1: build tables from initial quantization, run joint DC trellis and AC trellis
     fjpeg_gather_stats(context, &stats);
     fjpeg_generate_huffman_tables(context, &stats);
+    fjpeg_trellis_quant_dc(context);
+    fjpeg_run_trellis(context);
+
+    // Pass 2: re-gather statistics from chosen coefficients to refine Huffman rate models, then re-optimize
+    fjpeg_gather_stats(context, &stats);
+    fjpeg_generate_huffman_tables(context, &stats);
+    fjpeg_trellis_quant_dc(context);
     fjpeg_run_trellis(context);
 }
 
@@ -358,8 +366,8 @@ void fjpeg_print_usage() {
     printf("  -r <width>x<height>  Set resolution\r\n");
     printf("  -o <output_filename>  Output JPEG file\r\n");
     printf("  -t  Enable rate-distortion optimized (trellis) quantization\r\n");
-    printf("  -p  Write a progressive JPEG (spectral selection)\r\n");
-    printf("  -l <lambda>  Set trellis Lagrange multiplier (default 0.01)\r\n");
+    printf("  -p  Write a progressive JPEG (spectral selection + AC successive approximation)\r\n");
+    printf("  -l <lambda>  Set trellis Lagrange multiplier (default 0.007)\r\n");
     printf("  -d  Decode JPEG file\r\n");
     printf("  -h  Show help\r\n");
 }

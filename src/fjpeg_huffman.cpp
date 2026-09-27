@@ -109,7 +109,7 @@ int fjpeg_entropy_stats(fjpeg_huffman_statistics_t* stat, fjpeg_context* context
     }
 
     // Code DC coefficient
-    int coeff = fjpeg_round(block[0]); // Quantized DCT coefficients
+    int coeff = fjpeg_round_dc(block[0]); // Quantized DCT coefficients
     int diff = coeff - last_dc_coeff;
     last_dc_coeff = coeff;
     int orig_diff = diff;
@@ -207,7 +207,7 @@ int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, 
     }
 
     // Code DC coefficient
-    int coeff = fjpeg_round(block[0]); // Quantized DCT coefficients
+    int coeff = fjpeg_round_dc(block[0]); // Quantized DCT coefficients
     #ifdef FJPEG_DEBUG_COEFF
     printf("Coeff %d\r\n", coeff);
     #endif
@@ -424,7 +424,7 @@ fjpeg_short_huffman_table_t fjpeg_generate_huffman_from_stats(fjpeg_huffman_tabl
     for (i = 1; i <= maxlen; i++) {
         for (int j = 0; j <= 255; j++) {
             if (codesize[j] == i) {
-                if (p < 163) {
+                if (p < 256) {
                     huff_short.val[p++] = (uint8_t)j;
                 }
             }

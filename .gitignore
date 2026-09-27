@@ -1,0 +1,8 @@
+build/
+.vscode/
+3rdparty/
+__pycache__/
+*.pyc
+*.yuv
+*.jpg
+*.jpeg
