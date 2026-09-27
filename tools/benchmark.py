@@ -96,9 +96,58 @@ def evaluate_image(yuv_file, width=640, height=480, fjpeg_bin='build/Release/fjp
 
     return results
 
+def evaluate_12bit_image(yuv_file, width=640, height=480, fjpeg_bin='build/Release/fjpeg.exe'):
+    if not os.path.exists(fjpeg_bin):
+        fjpeg_bin = 'build/Debug/fjpeg.exe'
+    print(f"\n--- 12-bit Benchmark for {yuv_file} ---")
+    raw_sz = width * height * 3 // 2 * 2  # 16-bit words
+
+    # 1. 12-bit Lossless
+    jpg_ll = 'tmp_12bit_lossless.jpg'
+    yuv_ll = 'tmp_12bit_lossless.yuv'
+    subprocess.run([fjpeg_bin, '-i', yuv_file, '-r', f'{width}x{height}', '-b', '12', '-lossless', '-o', jpg_ll], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ll_sz = os.path.getsize(jpg_ll)
+    subprocess.run([fjpeg_bin, '-d', '-i', jpg_ll, '-o', yuv_ll], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    with open(yuv_file, 'rb') as f1, open(yuv_ll, 'rb') as f2:
+        exact = (f1.read() == f2.read())
+    ratio = raw_sz / ll_sz
+    bpp = (ll_sz * 8) / (width * height)
+    print(f"12-bit Lossless  | Compressed: {ll_sz} bytes | Ratio: {ratio:.2f}:1 | {bpp:.2f} bpp | Exact bit-for-bit: {exact}")
+
+    # 2. 12-bit DCT
+    with open(yuv_file, 'rb') as f:
+        orig = np.frombuffer(f.read(), dtype=np.uint16)
+    for q in [50, 70, 90]:
+        jpg_dct = f'tmp_12bit_q{q}.jpg'
+        yuv_dct = f'tmp_12bit_q{q}.yuv'
+        subprocess.run([fjpeg_bin, '-i', yuv_file, '-r', f'{width}x{height}', '-b', '12', '-q', str(q), '-o', jpg_dct], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        dct_sz = os.path.getsize(jpg_dct)
+        subprocess.run([fjpeg_bin, '-d', '-i', jpg_dct, '-o', yuv_dct], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        with open(yuv_dct, 'rb') as f:
+            dec = np.frombuffer(f.read(), dtype=np.uint16)
+        mse = np.mean((orig.astype(float) - dec.astype(float))**2)
+        p = 10.0 * np.log10(4095.0**2 / mse) if mse > 0 else 99.99
+        print(f"12-bit DCT q={q:<2}  | Compressed: {dct_sz:6d} bytes | PSNR: {p:.2f} dB")
+        try:
+            os.remove(jpg_dct)
+            os.remove(yuv_dct)
+        except:
+            pass
+
+    try:
+        os.remove(jpg_ll)
+        os.remove(yuv_ll)
+    except:
+        pass
+
 if __name__ == '__main__':
+    bin_path = 'build/Release/fjpeg.exe' if os.path.exists('build/Release/fjpeg.exe') else 'build/Debug/fjpeg.exe'
     for img in ['test_grad_texture.yuv', 'test_natural.yuv', 'test_edges.yuv']:
         if not os.path.exists(img):
             import generate_test_images
             generate_test_images.create_images()
-        evaluate_image(img)
+        evaluate_image(img, fjpeg_bin=bin_path)
+
+    if os.path.exists('test_natural_12bit.yuv'):
+        evaluate_12bit_image('test_natural_12bit.yuv', fjpeg_bin=bin_path)
+

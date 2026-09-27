@@ -81,9 +81,9 @@ class fjpeg_bitstream;
 class fjpeg_context;
 
 typedef struct {
-    uint32_t luma_dc[12];
+    uint32_t luma_dc[17];
     uint32_t luma_ac[256];
-    uint32_t chroma_dc[12];
+    uint32_t chroma_dc[17];
     uint32_t chroma_ac[256];
 } fjpeg_huffman_statistics_t;
 

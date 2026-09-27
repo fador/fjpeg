@@ -9,7 +9,7 @@ stage of the pipeline.
 
 **Key Features**
 
-* Baseline (sequential, 8-bit) and progressive JPEG encoding
+* Baseline (sequential, 8-bit), extended sequential (12-bit, SOF1), and progressive JPEG encoding
 * Full pipeline: raw YUV input → FDCT → quantization → zigzag → run-length
   coding → Huffman entropy coding → bitstream with 0xFF byte stuffing
 * Per-image optimal Huffman tables (DC and AC, luma and chroma), generated
@@ -19,12 +19,13 @@ stage of the pipeline.
 * Progressive mode: separate DC (with successive approximation) and
   per-component AC spectral-selection scans
 * Lossless JPEG mode: ITU-T T.81 Annex H (SOF3) spatial DPCM with predictors
-  1-7 and automatic rate-distortion predictor selection
+  1-7 and automatic rate-distortion predictor selection (8-bit and 12-bit)
+* 12-bit sample precision support for both Lossless (SOF3) and Extended Sequential DCT (SOF1)
 * Standard ITU-T T.81 quantization tables with libjpeg-compatible quality
   scaling, plus a tunable quantization deadzone
 * 4:2:0 chroma subsampling and a separable (2-pass) FDCT
 * Optional arithmetic-coding experiment (`fjpeg_arith`)
-* Baseline, progressive, and lossless JPEG decoding back to raw YUV 4:2:0
+* Baseline, progressive, 12-bit, and lossless JPEG decoding back to raw YUV 4:2:0 (8-bit or 16-bit words)
 
 **Building**
 
@@ -69,7 +70,8 @@ Options:
 -p                     write a progressive JPEG
 -lossless, -ll         write a lossless JPEG (ITU-T T.81 SOF3 DPCM)
 -pred <1-7>            select lossless predictor (1-7, default 0=auto best)
--d                     decode an existing JPEG (baseline, progressive, or lossless)
+-b <8|12>              sample bit depth (8 or 12, default 8)
+-d                     decode an existing JPEG (baseline, progressive, 12-bit, or lossless)
 -h                     show help
 ```
 
@@ -208,9 +210,8 @@ Enabled with `-t` (with default Lagrange multiplier `-l 0.007`):
 
 **Limitations**
 
-* Sequential, progressive, and lossless (SOF3) JPEG output only; no 12-bit
-  or arithmetic-coded JPEG output.
-* Raw YUV 4:2:0 input only; there is no color-space conversion or file-format
+* Sequential (8-bit and 12-bit), progressive, and lossless (8-bit and 12-bit) JPEG output supported; no arithmetic-coded JPEG output yet.
+* Raw YUV 4:2:0 input only (8-bit bytes or 16-bit words for 12-bit); there is no color-space conversion or file-format
   handling. Width and height must be even; edge blocks for non-MCU-aligned
   dimensions are handled by replicating the last row/column.
 * Error handling is minimal, as befits an educational implementation.

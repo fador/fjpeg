@@ -54,19 +54,32 @@ fjpeg_coeff_t* fjpeg_izigzag8x8(fjpeg_coeff_t* block, fjpeg_coeff_t* out) {
     return out;
 }
 
-fjpeg_pixel_t* fjpeg_extract_8x8(fjpeg_context* context, fjpeg_pixel_t* output, int x, int y, int channel) {    
-
-    fjpeg_pixel_t* image = channel==0?context->fjpeg_y:channel==1?context->fjpeg_cb:context->fjpeg_cr;
+float* fjpeg_extract_8x8(fjpeg_context* context, float* output, int x, int y, int channel) {    
     const int input_width = channel==0?context->width:context->width/2;
     const int input_height = channel==0?context->height:context->height/2;
+    float level_shift = (float)(1 << (context->bit_depth - 1));
 
-    for (int j = 0; j < 8; j++) {
-        int sy = y + j;
-        if (sy >= input_height) sy = input_height - 1; // replicate bottom edge
-        for (int i = 0; i < 8; i++) {
-            int sx = x + i;
-            if (sx >= input_width) sx = input_width - 1; // replicate right edge
-            output[j * 8 + i] = image[sy * input_width + sx];
+    if (context->bit_depth == 12) {
+        const uint16_t* image = channel==0?context->fjpeg_y16:channel==1?context->fjpeg_cb16:context->fjpeg_cr16;
+        for (int j = 0; j < 8; j++) {
+            int sy = y + j;
+            if (sy >= input_height) sy = input_height - 1; // replicate bottom edge
+            for (int i = 0; i < 8; i++) {
+                int sx = x + i;
+                if (sx >= input_width) sx = input_width - 1; // replicate right edge
+                output[j * 8 + i] = (float)image[sy * input_width + sx] - level_shift;
+            }
+        }
+    } else {
+        const fjpeg_pixel_t* image = channel==0?context->fjpeg_y:channel==1?context->fjpeg_cb:context->fjpeg_cr;
+        for (int j = 0; j < 8; j++) {
+            int sy = y + j;
+            if (sy >= input_height) sy = input_height - 1; // replicate bottom edge
+            for (int i = 0; i < 8; i++) {
+                int sx = x + i;
+                if (sx >= input_width) sx = input_width - 1; // replicate right edge
+                output[j * 8 + i] = (float)image[sy * input_width + sx] - level_shift;
+            }
         }
     }
     return output;
@@ -99,7 +112,7 @@ bool fjpeg_store_coeff_8x8(fjpeg_context* context, fjpeg_coeff_t* input, int x, 
 }
 
 
-fjpeg_coeff_t* fjpeg_dct8x8(fjpeg_context* context, fjpeg_pixel_t* block, fjpeg_coeff_t* out) {
+fjpeg_coeff_t* fjpeg_dct8x8(fjpeg_context* context, const float* block, fjpeg_coeff_t* out) {
     // Separable 2D DCT: transform rows first, then columns. This reduces the
     // work from O(N^4) to O(2 * N^3) per block (4096 -> 1024 multiplies).
     float tmp[FJPEG_BLOCK_SIZE * FJPEG_BLOCK_SIZE];
@@ -109,7 +122,7 @@ fjpeg_coeff_t* fjpeg_dct8x8(fjpeg_context* context, fjpeg_pixel_t* block, fjpeg_
         for (int u = 0; u < FJPEG_BLOCK_SIZE; u++) {
             float sum = 0.0f;
             for (int x = 0; x < FJPEG_BLOCK_SIZE; x++) {
-                sum += ((float)block[y * FJPEG_BLOCK_SIZE + x] - 128.0f) * context->precalc_cos[x][u];
+                sum += block[y * FJPEG_BLOCK_SIZE + x] * context->precalc_cos[x][u];
             }
             tmp[y * FJPEG_BLOCK_SIZE + u] = sum;
         }
@@ -495,7 +508,7 @@ void fjpeg_trellis_quant_dc(fjpeg_context* context) {
 
 bool fjpeg_transquant_input(fjpeg_context* context) {
     
-    fjpeg_pixel_t cur_block[64];
+    float cur_block[64];
     fjpeg_coeff_t dct_block[64];
     fjpeg_coeff_t dct_block2[64];
     

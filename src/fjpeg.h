@@ -59,9 +59,9 @@ class fjpeg_context {
 
     uint8_t fjpeg_luminance_quantization_table[64];
     uint8_t fjpeg_chrominance_quantization_table[64];
-    fjpeg_huffman_table_t fjpeg_huffman_luma_dc[16];
+    fjpeg_huffman_table_t fjpeg_huffman_luma_dc[32];
     fjpeg_huffman_table_t fjpeg_huffman_luma_ac[256];
-    fjpeg_huffman_table_t fjpeg_huffman_chroma_dc[16];
+    fjpeg_huffman_table_t fjpeg_huffman_chroma_dc[32];
     fjpeg_huffman_table_t fjpeg_huffman_chroma_ac[256];
 
     fjpeg_short_huffman_table_t fjpeg_short_huffman_chroma_dc;
@@ -70,9 +70,14 @@ class fjpeg_context {
     fjpeg_short_huffman_table_t fjpeg_short_huffman_luma_dc;
     fjpeg_short_huffman_table_t fjpeg_short_huffman_luma_ac;
 
+    int bit_depth;
     fjpeg_pixel_t* fjpeg_y;
     fjpeg_pixel_t* fjpeg_cb;
     fjpeg_pixel_t* fjpeg_cr;
+
+    uint16_t* fjpeg_y16;
+    uint16_t* fjpeg_cb16;
+    uint16_t* fjpeg_cr16;
 
     fjpeg_coeff_t* fjpeg_ydct;
     fjpeg_coeff_t* fjpeg_cbdct;
@@ -98,16 +103,20 @@ class fjpeg_context {
         padded_height = 0;
         quality = 0;
         channels = 3;
+        bit_depth = 8;
         trellis_lambda = 0.0f;
         memset(fjpeg_luminance_quantization_table, 0, 64);
         memset(fjpeg_chrominance_quantization_table, 0, 64);
-        memset(fjpeg_huffman_luma_dc, 0, 16 * sizeof(fjpeg_huffman_table_t));
+        memset(fjpeg_huffman_luma_dc, 0, 32 * sizeof(fjpeg_huffman_table_t));
         memset(fjpeg_huffman_luma_ac, 0, 256 * sizeof(fjpeg_huffman_table_t));
-        memset(fjpeg_huffman_chroma_dc, 0, 16 * sizeof(fjpeg_huffman_table_t));
+        memset(fjpeg_huffman_chroma_dc, 0, 32 * sizeof(fjpeg_huffman_table_t));
         memset(fjpeg_huffman_chroma_ac, 0, 256 * sizeof(fjpeg_huffman_table_t));
         fjpeg_y = nullptr;
         fjpeg_cb = nullptr;
         fjpeg_cr = nullptr;
+        fjpeg_y16 = nullptr;
+        fjpeg_cb16 = nullptr;
+        fjpeg_cr16 = nullptr;
         fjpeg_ydct = nullptr;
         fjpeg_cbdct = nullptr;
         fjpeg_crdct = nullptr;
@@ -166,7 +175,7 @@ class fjpeg_context {
         return true;
     }
 
-    bool readInput(const char* filename, int width, int height) {
+    bool readInput(const char* filename, int width, int height, int depth = 8) {
         input = fopen(filename, "rb");
         if (!input) {
             return false;
@@ -174,15 +183,30 @@ class fjpeg_context {
 
         this->width = width;
         this->height = height;
+        this->bit_depth = depth;
 
         // Pad dimensions up to the 4:2:0 MCU size so edge blocks stay in bounds.
         // Edge blocks are filled by replicating the last row/column on read.
         this->padded_width = (width + 15) & ~15;
         this->padded_height = (height + 15) & ~15;
 
-        fjpeg_y = (fjpeg_pixel_t*)malloc(width * height * sizeof(fjpeg_pixel_t));
-        fjpeg_cb = (fjpeg_pixel_t*)malloc(width * height * sizeof(fjpeg_pixel_t));
-        fjpeg_cr = (fjpeg_pixel_t*)malloc(width * height * sizeof(fjpeg_pixel_t));
+        if (this->bit_depth == 12) {
+            fjpeg_y16 = (uint16_t*)malloc(width * height * sizeof(uint16_t));
+            fjpeg_cb16 = (uint16_t*)malloc(((width * height) >> 2) * sizeof(uint16_t));
+            fjpeg_cr16 = (uint16_t*)malloc(((width * height) >> 2) * sizeof(uint16_t));
+
+            fread(fjpeg_y16, sizeof(uint16_t), width * height, input);
+            fread(fjpeg_cb16, sizeof(uint16_t), (width * height) >> 2, input);
+            fread(fjpeg_cr16, sizeof(uint16_t), (width * height) >> 2, input);
+        } else {
+            fjpeg_y = (fjpeg_pixel_t*)malloc(width * height * sizeof(fjpeg_pixel_t));
+            fjpeg_cb = (fjpeg_pixel_t*)malloc(width * height * sizeof(fjpeg_pixel_t));
+            fjpeg_cr = (fjpeg_pixel_t*)malloc(width * height * sizeof(fjpeg_pixel_t));
+
+            fread(fjpeg_y, 1, width * height, input);
+            fread(fjpeg_cb, 1, (width * height) >> 2, input);
+            fread(fjpeg_cr, 1, (width * height) >> 2, input);
+        }
 
         fjpeg_ydct = (fjpeg_coeff_t*)malloc(padded_width * padded_height * sizeof(fjpeg_coeff_t));
         fjpeg_cbdct = (fjpeg_coeff_t*)malloc(padded_width * padded_height * sizeof(fjpeg_coeff_t));
@@ -191,10 +215,6 @@ class fjpeg_context {
         memset(fjpeg_ydct, 0, padded_width * padded_height * sizeof(fjpeg_coeff_t));
         memset(fjpeg_cbdct, 0, padded_width * padded_height * sizeof(fjpeg_coeff_t));
         memset(fjpeg_crdct, 0, padded_width * padded_height * sizeof(fjpeg_coeff_t));
-
-        fread(fjpeg_y, 1, width * height, input);
-        fread(fjpeg_cb, 1, (width * height) >> 2, input);
-        fread(fjpeg_cr, 1, (width * height) >> 2, input);
 
         return true;
     }
@@ -218,6 +238,18 @@ class fjpeg_context {
 
         if (fjpeg_cr) {
             free(fjpeg_cr);
+        }
+
+        if (fjpeg_y16) {
+            free(fjpeg_y16);
+        }
+
+        if (fjpeg_cb16) {
+            free(fjpeg_cb16);
+        }
+
+        if (fjpeg_cr16) {
+            free(fjpeg_cr16);
         }
 
         if (fjpeg_ydct) {

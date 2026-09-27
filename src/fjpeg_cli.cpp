@@ -54,6 +54,7 @@ int main(int argc, char** argv) {
     bool progressive = false;
     bool lossless = false;
     int predictor = 0;
+    int bit_depth = 8;
     float trellis_lambda = 0.0f;
 
     // Parse filename, quality and resolution
@@ -135,6 +136,22 @@ int main(int argc, char** argv) {
             }
             i++;
         }
+        else if(strcmp(argv[i], "-b") == 0 || strcmp(argv[i], "-depth") == 0 || strcmp(argv[i], "--bit-depth") == 0) {
+            if(i+1 < argc) {
+                bit_depth = atoi(argv[i+1]);
+                if (bit_depth != 8 && bit_depth != 12) {
+                    fprintf(stderr, "Error: Bit depth must be 8 or 12\n");
+                    return 1;
+                }
+            } else {
+                fprintf(stderr, "Error: Missing bit depth value\n");
+                return 1;
+            }
+            i++;
+        }
+        else if(strcmp(argv[i], "-12") == 0 || strcmp(argv[i], "-12bit") == 0) {
+            bit_depth = 12;
+        }
         else if(strcmp(argv[i], "-l") == 0) {
             if(i+1 < argc) {
                 trellis_lambda = (float)atof(argv[i+1]);
@@ -201,7 +218,7 @@ int main(int argc, char** argv) {
 
     // Calculate time
     auto start = std::chrono::high_resolution_clock::now();
-    context->readInput(input_filename.c_str(), width, height);
+    context->readInput(input_filename.c_str(), width, height, bit_depth);
     auto end = std::chrono::high_resolution_clock::now();
     time_input_read_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
@@ -242,7 +259,7 @@ int main(int argc, char** argv) {
     fclose(fp);
     
     printf("Time: Input read %d ms, DCT/Quant %d ms, Header %d ms\r\n", (int)time_input_read_ms, (int)time_dct_quant_ms, (int)time_header_ms);
-    printf("Input size: %d bytes\r\n", context->width*context->height*3/2);
+    printf("Input size: %d bytes\r\n", context->width*context->height*3/2 * (bit_depth == 12 ? 2 : 1));
     printf("Output size: %d bytes\r\n", file_size);
 
     delete stream;

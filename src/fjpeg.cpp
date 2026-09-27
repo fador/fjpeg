@@ -84,9 +84,10 @@ static void fjpeg_generate_huffman_tables(fjpeg_context* context, fjpeg_huffman_
     memset(context->fjpeg_huffman_chroma_dc, 0, sizeof(context->fjpeg_huffman_chroma_dc));
     memset(context->fjpeg_huffman_chroma_ac, 0, sizeof(context->fjpeg_huffman_chroma_ac));
 
-    context->fjpeg_short_huffman_luma_dc = fjpeg_generate_huffman_from_stats(context->fjpeg_huffman_luma_dc, huff_stats->luma_dc, 12);
+    int dc_stats_count = (context->bit_depth == 12) ? 17 : 12;
+    context->fjpeg_short_huffman_luma_dc = fjpeg_generate_huffman_from_stats(context->fjpeg_huffman_luma_dc, huff_stats->luma_dc, dc_stats_count);
     context->fjpeg_short_huffman_luma_ac = fjpeg_generate_huffman_from_stats(context->fjpeg_huffman_luma_ac, huff_stats->luma_ac, 256);
-    context->fjpeg_short_huffman_chroma_dc = fjpeg_generate_huffman_from_stats(context->fjpeg_huffman_chroma_dc, huff_stats->chroma_dc, 12);
+    context->fjpeg_short_huffman_chroma_dc = fjpeg_generate_huffman_from_stats(context->fjpeg_huffman_chroma_dc, huff_stats->chroma_dc, dc_stats_count);
     context->fjpeg_short_huffman_chroma_ac = fjpeg_generate_huffman_from_stats(context->fjpeg_huffman_chroma_ac, huff_stats->chroma_ac, 256);
 }
 
@@ -191,10 +192,11 @@ bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context) {
     }
     
    
-    // SOF0
-    stream->writeBits(0xFFC0, 16);
+    // SOF0 (0xFFC0) for 8-bit baseline, SOF1 (0xFFC1) for 12-bit extended sequential
+    uint16_t sof_marker = (context->bit_depth == 12) ? 0xFFC1 : 0xFFC0;
+    stream->writeBits(sof_marker, 16);
     stream->writeBits(context->channels==1?11:17, 16);
-    stream->writeBits(8, 8); // 8 bits per sample
+    stream->writeBits(context->bit_depth, 8); // bits per sample (8 or 12)
     stream->writeBits(context->height, 16);
     stream->writeBits(context->width, 16);
     stream->writeBits(context->channels, 8);
@@ -369,6 +371,7 @@ void fjpeg_print_usage() {
     printf("  -p  Write a progressive JPEG (spectral selection + AC successive approximation)\r\n");
     printf("  -lossless, -ll  Write a lossless JPEG (ITU-T T.81 SOF3 DPCM)\r\n");
     printf("  -pred <1-7>  Select lossless predictor (1-7, default 0=auto best)\r\n");
+    printf("  -b <8|12>  Set sample bit depth (8 or 12, default 8)\r\n");
     printf("  -l <lambda>  Set trellis Lagrange multiplier (default 0.007)\r\n");
     printf("  -d  Decode JPEG file\r\n");
     printf("  -h  Show help\r\n");

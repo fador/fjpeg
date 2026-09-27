@@ -233,7 +233,8 @@ struct fjpeg_dec_component {
     int blocks_w;       // MCU-padded block grid (matches the encoder)
     int blocks_h;
     std::vector<int16_t> coeff;   // blocks_w * blocks_h * 64, zigzag order
-    std::vector<uint8_t> plane;   // decoded samples, stride = blocks_w * 8
+    std::vector<uint8_t> plane;   // decoded samples (8-bit), stride = blocks_w * 8
+    std::vector<uint16_t> plane16; // decoded samples (12/16-bit), stride = blocks_w * 8
     int dc_pred;
     int eob_run;
 
@@ -324,7 +325,11 @@ public:
         if (lossless) {
             for (int ci = 0; ci < num_comps; ci++) {
                 fjpeg_dec_component& c = comps[ci];
-                fwrite(c.plane.data(), 1, (size_t)c.width * c.height, fp);
+                if (precision > 8) {
+                    fwrite(c.plane16.data(), sizeof(uint16_t), (size_t)c.width * c.height, fp);
+                } else {
+                    fwrite(c.plane.data(), 1, (size_t)c.width * c.height, fp);
+                }
             }
             fclose(fp);
             return true;
@@ -348,11 +353,34 @@ public:
                     for (int i = 0; i < 64; i++) {
                         dq[i] = natural[i] * (fjpeg_coeff_t)q[i];
                     }
-                    fjpeg_pixel_t pixels[64];
-                    fjpeg_idct8x8(&ctx, dq, pixels);
-                    uint8_t* dst = &c.plane[(by * 8) * stride + bx * 8];
-                    for (int j = 0; j < 8; j++) {
-                        memcpy(dst + j * stride, pixels + j * 8, 8);
+
+                    if (precision == 12) {
+                        uint16_t pixels16[64];
+                        for (int y = 0; y < 8; y++) {
+                            for (int x = 0; x < 8; x++) {
+                                float sum = 0.0f;
+                                for (int v = 0; v < 8; v++) {
+                                    for (int u = 0; u < 8; u++) {
+                                        float cu = (u == 0) ? 1.0f / sqrtf(2.f) : 1.0f;
+                                        float cv = (v == 0) ? 1.0f / sqrtf(2.f) : 1.0f;
+                                        sum += cu * cv * dq[v * 8 + u] * ctx.precalc_cos[x][u] * ctx.precalc_cos[y][v];
+                                    }
+                                }
+                                float val = (0.25f * sum) + 2048.0f;
+                                pixels16[y * 8 + x] = (uint16_t)FJPEG_CLAMP((int)lroundf(val), 0, 4095);
+                            }
+                        }
+                        uint16_t* dst = &c.plane16[(by * 8) * stride + bx * 8];
+                        for (int j = 0; j < 8; j++) {
+                            memcpy(dst + j * stride, pixels16 + j * 8, 8 * sizeof(uint16_t));
+                        }
+                    } else {
+                        fjpeg_pixel_t pixels[64];
+                        fjpeg_idct8x8(&ctx, dq, pixels);
+                        uint8_t* dst = &c.plane[(by * 8) * stride + bx * 8];
+                        for (int j = 0; j < 8; j++) {
+                            memcpy(dst + j * stride, pixels + j * 8, 8);
+                        }
                     }
                 }
             }
@@ -363,7 +391,11 @@ public:
             fjpeg_dec_component& c = comps[ci];
             int stride = c.blocks_w * 8;
             for (int y = 0; y < c.height; y++) {
-                fwrite(&c.plane[(size_t)y * stride], 1, c.width, fp);
+                if (precision > 8) {
+                    fwrite(&c.plane16[(size_t)y * stride], sizeof(uint16_t), c.width, fp);
+                } else {
+                    fwrite(&c.plane[(size_t)y * stride], 1, c.width, fp);
+                }
             }
         }
 
@@ -491,7 +523,11 @@ private:
             fjpeg_dec_component& c = comps[i];
             c.width = (width * c.h + max_h - 1) / max_h;
             c.height = (height * c.v + max_v - 1) / max_v;
-            c.plane.assign((size_t)c.width * c.height, 0);
+            if (precision > 8) {
+                c.plane16.assign((size_t)c.width * c.height, 0);
+            } else {
+                c.plane.assign((size_t)c.width * c.height, 0);
+            }
         }
         return true;
     }
@@ -499,9 +535,9 @@ private:
     bool parse_sof(int length, bool prog) {
         (void)length;
         progressive = prog;
-        int precision = reader->read_u8();
-        if (precision != 8) {
-            fprintf(stderr, "Error: Only 8-bit samples are supported\n");
+        precision = reader->read_u8();
+        if (precision != 8 && precision != 12) {
+            fprintf(stderr, "Error: Precision %d is not supported (only 8 and 12-bit supported)\n", precision);
             return false;
         }
         height = reader->read_u16();
@@ -540,7 +576,11 @@ private:
             c.blocks_w = mcus_per_row * c.h;
             c.blocks_h = mcus_per_col * c.v;
             c.coeff.assign((size_t)c.blocks_w * c.blocks_h * 64, 0);
-            c.plane.assign((size_t)c.blocks_w * 8 * c.blocks_h * 8, 0);
+            if (precision > 8) {
+                c.plane16.assign((size_t)c.blocks_w * 8 * c.blocks_h * 8, 0);
+            } else {
+                c.plane.assign((size_t)c.blocks_w * 8 * c.blocks_h * 8, 0);
+            }
             c.dc_pred = 0;
             c.eob_run = 0;
         }
@@ -597,13 +637,20 @@ private:
     // -----------------------------------------------------------------------
     // Lossless (SOF3) decoding
     // -----------------------------------------------------------------------
-    bool decode_lossless_scan(const int* scan_comp, const int* dc_sel, int ns, int predictor, int pt) {
+    template <typename T>
+    bool decode_lossless_scan_t(const int* scan_comp, const int* dc_sel, int ns, int predictor, int pt) {
+        auto get_plane = [this](fjpeg_dec_component& c) -> T* {
+            if constexpr (sizeof(T) == 2) return c.plane16.data();
+            else return (T*)c.plane.data();
+        };
+
         if (ns > 1) {
             // Interleaved scan across all components in scan
             for (int my = 0; my < mcus_per_col; my++) {
                 for (int mx = 0; mx < mcus_per_row; mx++) {
                     for (int s = 0; s < ns; s++) {
                         fjpeg_dec_component& c = comps[scan_comp[s]];
+                        T* plane = get_plane(c);
                         int th = dc_sel[s];
                         for (int v = 0; v < c.v; v++) {
                             for (int h = 0; h < c.h; h++) {
@@ -614,13 +661,13 @@ private:
                                     if (py == 0 && px == 0) {
                                         pred = 1 << (precision - pt - 1);
                                     } else if (py == 0) {
-                                        pred = c.plane[py * c.width + (px - 1)];
+                                        pred = plane[py * c.width + (px - 1)];
                                     } else if (px == 0) {
-                                        pred = c.plane[(py - 1) * c.width + px];
+                                        pred = plane[(py - 1) * c.width + px];
                                     } else {
-                                        int l  = c.plane[py * c.width + (px - 1)];
-                                        int t  = c.plane[(py - 1) * c.width + px];
-                                        int tl = c.plane[(py - 1) * c.width + (px - 1)];
+                                        int l  = plane[py * c.width + (px - 1)];
+                                        int t  = plane[(py - 1) * c.width + px];
+                                        int tl = plane[(py - 1) * c.width + (px - 1)];
                                         pred = fjpeg_lossless_predict(tl, t, l, predictor);
                                     }
 
@@ -630,7 +677,7 @@ private:
                                         int bits = reader->read_bits(cat);
                                         diff = fjpeg_extend(bits, cat);
                                     }
-                                    c.plane[py * c.width + px] = (uint8_t)((pred + (diff << pt)) & ((1 << precision) - 1));
+                                    plane[py * c.width + px] = (T)((pred + (diff << pt)) & ((1 << precision) - 1));
                                 }
                             }
                         }
@@ -640,6 +687,7 @@ private:
         } else {
             // Non-interleaved scan: line-by-line raster
             fjpeg_dec_component& c = comps[scan_comp[0]];
+            T* plane = get_plane(c);
             int th = dc_sel[0];
             for (int py = 0; py < c.height; py++) {
                 for (int px = 0; px < c.width; px++) {
@@ -647,13 +695,13 @@ private:
                     if (py == 0 && px == 0) {
                         pred = 1 << (precision - pt - 1);
                     } else if (py == 0) {
-                        pred = c.plane[py * c.width + (px - 1)];
+                        pred = plane[py * c.width + (px - 1)];
                     } else if (px == 0) {
-                        pred = c.plane[(py - 1) * c.width + px];
+                        pred = plane[(py - 1) * c.width + px];
                     } else {
-                        int l  = c.plane[py * c.width + (px - 1)];
-                        int t  = c.plane[(py - 1) * c.width + px];
-                        int tl = c.plane[(py - 1) * c.width + (px - 1)];
+                        int l  = plane[py * c.width + (px - 1)];
+                        int t  = plane[(py - 1) * c.width + px];
+                        int tl = plane[(py - 1) * c.width + (px - 1)];
                         pred = fjpeg_lossless_predict(tl, t, l, predictor);
                     }
 
@@ -663,11 +711,19 @@ private:
                         int bits = reader->read_bits(cat);
                         diff = fjpeg_extend(bits, cat);
                     }
-                    c.plane[py * c.width + px] = (uint8_t)((pred + (diff << pt)) & ((1 << precision) - 1));
+                    plane[py * c.width + px] = (T)((pred + (diff << pt)) & ((1 << precision) - 1));
                 }
             }
         }
         return true;
+    }
+
+    bool decode_lossless_scan(const int* scan_comp, const int* dc_sel, int ns, int predictor, int pt) {
+        if (precision > 8) {
+            return decode_lossless_scan_t<uint16_t>(scan_comp, dc_sel, ns, predictor, pt);
+        } else {
+            return decode_lossless_scan_t<uint8_t>(scan_comp, dc_sel, ns, predictor, pt);
+        }
     }
 
     // -----------------------------------------------------------------------

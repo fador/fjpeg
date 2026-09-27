@@ -122,8 +122,8 @@ int fjpeg_entropy_stats(fjpeg_huffman_statistics_t* stat, fjpeg_context* context
         size++;
     }
     // Check for overflow
-    if (size > 11) {
-        // Handle error or clamp the size
+    int max_dc_size = (context->bit_depth == 12) ? 16 : 11;
+    if (size > max_dc_size) {
         fprintf(stderr, "Error: DC coefficient size overflow 1\n");
         exit(1);
     }
@@ -172,10 +172,10 @@ int fjpeg_entropy_stats(fjpeg_huffman_statistics_t* stat, fjpeg_context* context
             coeff >>= 1;
             size++;                
         }
-            // Check for overflow
-        if (size > 10) {
-            // Handle error or clamp the size
-            fprintf(stderr, "Error: DC coefficient size overflow 2\n");
+        // Check for overflow
+        int max_ac_size = (context->bit_depth == 12) ? 15 : 10;
+        if (size > max_ac_size) {
+            fprintf(stderr, "Error: AC coefficient size overflow\n");
             exit(1);
         }
         if(channel==0) stat->luma_ac[(run_length << 4) + size]++;
@@ -223,8 +223,8 @@ int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, 
         size++;
     }
     // Check for overflow
-    if (size > 11) {
-        // Handle error or clamp the size
+    int max_dc_size = (context->bit_depth == 12) ? 16 : 11;
+    if (size > max_dc_size) {
         fprintf(stderr, "Error: DC coefficient size overflow 1\n");
         exit(1);
     }
@@ -289,10 +289,10 @@ int fjpeg_entropy_encode_block(fjpeg_bitstream* stream, fjpeg_context* context, 
             coeff >>= 1;
             size++;                
         }
-            // Check for overflow
-        if (size > 10) {
-            // Handle error or clamp the size
-            fprintf(stderr, "Error: DC coefficient size overflow 2\n");
+        // Check for overflow
+        int max_ac_size = (context->bit_depth == 12) ? 15 : 10;
+        if (size > max_ac_size) {
+            fprintf(stderr, "Error: AC coefficient size overflow\n");
             exit(1);
         }
         #ifdef FJPEG_DEBUG_COEFF

@@ -51,7 +51,16 @@ def create_images():
         f.write(cb3.tobytes())
         f.write(cr3.tobytes())
 
-    print('Generated test_grad_texture.yuv, test_natural.yuv, test_edges.yuv')
+    # 4. Natural 12-bit scene (16-bit little-endian words, values 0..4095)
+    y2_12 = np.clip(y2.astype(np.float32) * 16.0, 0, 4095).astype(np.uint16)
+    cb2_12 = np.clip(cb2.astype(np.float32) * 16.0, 0, 4095).astype(np.uint16)
+    cr2_12 = np.clip(cr2.astype(np.float32) * 16.0, 0, 4095).astype(np.uint16)
+    with open('test_natural_12bit.yuv', 'wb') as f:
+        f.write(y2_12.tobytes())
+        f.write(cb2_12.tobytes())
+        f.write(cr2_12.tobytes())
+
+    print('Generated test_grad_texture.yuv, test_natural.yuv, test_edges.yuv, test_natural_12bit.yuv')
 
 if __name__ == '__main__':
     create_images()

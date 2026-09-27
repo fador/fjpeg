@@ -60,12 +60,13 @@ static inline void fjpeg_diff_to_vli(int diff, int* out_category, int* out_bits)
     }
 }
 
-// Compute difference for a single sample at (px, py) in a plane
-static inline int fjpeg_calc_diff(const uint8_t* plane, int width, int height, int px, int py, int predictor) {
+// Compute difference modulo 2^P for a single sample at (px, py) in a plane
+template <typename T>
+static inline int fjpeg_calc_diff(const T* plane, int width, int height, int px, int py, int predictor, int precision) {
     (void)height;
     int pred;
     if (py == 0 && px == 0) {
-        pred = 128; // Initial predictor value for 8-bit precision (2^(8-1))
+        pred = 1 << (precision - 1); // 128 for 8-bit, 2048 for 12-bit
     } else if (py == 0) {
         pred = plane[py * width + (px - 1)];
     } else if (px == 0) {
@@ -76,7 +77,97 @@ static inline int fjpeg_calc_diff(const uint8_t* plane, int width, int height, i
         int tl = plane[(py - 1) * width + (px - 1)];
         pred = fjpeg_lossless_predict(tl, t, l, predictor);
     }
-    return (int)plane[py * width + px] - pred;
+    int diff = (int)plane[py * width + px] - pred;
+    int mask = (1 << precision) - 1;
+    diff = diff & mask;
+    if (diff >= (1 << (precision - 1))) {
+        diff -= (1 << precision);
+    }
+    return diff;
+}
+
+template <typename T>
+static void fjpeg_lossless_gather_freq(const T* y_plane, const T* cb_plane, const T* cr_plane,
+                                      int w, int h, int cw, int ch, int channels,
+                                      int predictor, int precision,
+                                      uint32_t freq_y[17], uint32_t freq_c[17]) {
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            int diff = fjpeg_calc_diff(y_plane, w, h, x, y, predictor, precision);
+            int cat, bits;
+            fjpeg_diff_to_vli(diff, &cat, &bits);
+            if (cat <= 16) freq_y[cat]++;
+        }
+    }
+
+    if (channels == 3) {
+        for (int y = 0; y < ch; y++) {
+            for (int x = 0; x < cw; x++) {
+                int diff_cb = fjpeg_calc_diff(cb_plane, cw, ch, x, y, predictor, precision);
+                int cat, bits;
+                fjpeg_diff_to_vli(diff_cb, &cat, &bits);
+                if (cat <= 16) freq_c[cat]++;
+
+                int diff_cr = fjpeg_calc_diff(cr_plane, cw, ch, x, y, predictor, precision);
+                fjpeg_diff_to_vli(diff_cr, &cat, &bits);
+                if (cat <= 16) freq_c[cat]++;
+            }
+        }
+    }
+}
+
+template <typename T>
+static void fjpeg_lossless_encode_scan(fjpeg_bitstream* stream, const T* y_plane, const T* cb_plane, const T* cr_plane,
+                                       int w, int h, int cw, int ch, int ncomp, int predictor, int precision,
+                                       const fjpeg_huffman_table_t* huff_table_y, const fjpeg_huffman_table_t* huff_table_c) {
+    int mb_w = (w + 1) / 2;
+    int mb_h = (h + 1) / 2;
+
+    for (int mb_y = 0; mb_y < mb_h; mb_y++) {
+        for (int mb_x = 0; mb_x < mb_w; mb_x++) {
+            // Y component: 2x2 samples per MCU
+            for (int dy = 0; dy < 2; dy++) {
+                for (int dx = 0; dx < 2; dx++) {
+                    int px = mb_x * 2 + dx;
+                    int py = mb_y * 2 + dy;
+                    if (px < w && py < h) {
+                        int diff = fjpeg_calc_diff(y_plane, w, h, px, py, predictor, precision);
+                        int cat, bits;
+                        fjpeg_diff_to_vli(diff, &cat, &bits);
+                        stream->writeBits(huff_table_y[cat].code, huff_table_y[cat].len);
+                        if (cat > 0) {
+                            stream->writeBits(bits, cat);
+                        }
+                    }
+                }
+            }
+
+            // Cb & Cr components: 1 sample each per MCU
+            if (ncomp == 3) {
+                int px = mb_x;
+                int py = mb_y;
+                if (px < cw && py < ch) {
+                    // Cb
+                    int diff_cb = fjpeg_calc_diff(cb_plane, cw, ch, px, py, predictor, precision);
+                    int cat_cb, bits_cb;
+                    fjpeg_diff_to_vli(diff_cb, &cat_cb, &bits_cb);
+                    stream->writeBits(huff_table_c[cat_cb].code, huff_table_c[cat_cb].len);
+                    if (cat_cb > 0) {
+                        stream->writeBits(bits_cb, cat_cb);
+                    }
+
+                    // Cr
+                    int diff_cr = fjpeg_calc_diff(cr_plane, cw, ch, px, py, predictor, precision);
+                    int cat_cr, bits_cr;
+                    fjpeg_diff_to_vli(diff_cr, &cat_cr, &bits_cr);
+                    stream->writeBits(huff_table_c[cat_cr].code, huff_table_c[cat_cr].len);
+                    if (cat_cr > 0) {
+                        stream->writeBits(bits_cr, cat_cr);
+                    }
+                }
+            }
+        }
+    }
 }
 
 // Evaluate total entropy bits for a candidate predictor
@@ -88,31 +179,14 @@ static uint64_t fjpeg_eval_predictor_cost(fjpeg_context* context, int predictor)
     int h = context->height;
     int cw = w / 2;
     int ch = h / 2;
+    int prec = context->bit_depth;
 
-    // Y plane
-    for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-            int diff = fjpeg_calc_diff(context->fjpeg_y, w, h, x, y, predictor);
-            int cat, bits;
-            fjpeg_diff_to_vli(diff, &cat, &bits);
-            if (cat <= 16) freq_y[cat]++;
-        }
-    }
-
-    // Chroma planes
-    if (context->channels == 3) {
-        for (int y = 0; y < ch; y++) {
-            for (int x = 0; x < cw; x++) {
-                int diff_cb = fjpeg_calc_diff(context->fjpeg_cb, cw, ch, x, y, predictor);
-                int cat, bits;
-                fjpeg_diff_to_vli(diff_cb, &cat, &bits);
-                if (cat <= 16) freq_c[cat]++;
-
-                int diff_cr = fjpeg_calc_diff(context->fjpeg_cr, cw, ch, x, y, predictor);
-                fjpeg_diff_to_vli(diff_cr, &cat, &bits);
-                if (cat <= 16) freq_c[cat]++;
-            }
-        }
+    if (prec == 12) {
+        fjpeg_lossless_gather_freq(context->fjpeg_y16, context->fjpeg_cb16, context->fjpeg_cr16,
+                                  w, h, cw, ch, context->channels, predictor, prec, freq_y, freq_c);
+    } else {
+        fjpeg_lossless_gather_freq(context->fjpeg_y, context->fjpeg_cb, context->fjpeg_cr,
+                                  w, h, cw, ch, context->channels, predictor, prec, freq_y, freq_c);
     }
 
     // Estimate total bits: Shannon entropy estimate + payload bits
@@ -141,7 +215,7 @@ static uint64_t fjpeg_eval_predictor_cost(fjpeg_context* context, int predictor)
 }
 
 bool fjpeg_generate_lossless(fjpeg_bitstream* stream, fjpeg_context* context, int predictor) {
-    if (!stream || !context || !context->fjpeg_y) return false;
+    if (!stream || !context || (!context->fjpeg_y && !context->fjpeg_y16)) return false;
 
     // Auto-select predictor if not specified or invalid
     if (predictor < 1 || predictor > 7) {
@@ -162,33 +236,18 @@ bool fjpeg_generate_lossless(fjpeg_bitstream* stream, fjpeg_context* context, in
     int h = context->height;
     int cw = w / 2;
     int ch = h / 2;
+    int prec = context->bit_depth;
 
     // Gather frequency statistics for the chosen predictor
     uint32_t freq_y[17] = {0};
     uint32_t freq_c[17] = {0};
 
-    for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-            int diff = fjpeg_calc_diff(context->fjpeg_y, w, h, x, y, predictor);
-            int cat, bits;
-            fjpeg_diff_to_vli(diff, &cat, &bits);
-            if (cat <= 16) freq_y[cat]++;
-        }
-    }
-
-    if (context->channels == 3) {
-        for (int y = 0; y < ch; y++) {
-            for (int x = 0; x < cw; x++) {
-                int diff_cb = fjpeg_calc_diff(context->fjpeg_cb, cw, ch, x, y, predictor);
-                int cat, bits;
-                fjpeg_diff_to_vli(diff_cb, &cat, &bits);
-                if (cat <= 16) freq_c[cat]++;
-
-                int diff_cr = fjpeg_calc_diff(context->fjpeg_cr, cw, ch, x, y, predictor);
-                fjpeg_diff_to_vli(diff_cr, &cat, &bits);
-                if (cat <= 16) freq_c[cat]++;
-            }
-        }
+    if (prec == 12) {
+        fjpeg_lossless_gather_freq(context->fjpeg_y16, context->fjpeg_cb16, context->fjpeg_cr16,
+                                  w, h, cw, ch, context->channels, predictor, prec, freq_y, freq_c);
+    } else {
+        fjpeg_lossless_gather_freq(context->fjpeg_y, context->fjpeg_cb, context->fjpeg_cr,
+                                  w, h, cw, ch, context->channels, predictor, prec, freq_y, freq_c);
     }
 
     // Generate optimal Huffman tables
@@ -222,7 +281,7 @@ bool fjpeg_generate_lossless(fjpeg_bitstream* stream, fjpeg_context* context, in
     int ncomp = context->channels;
     stream->writeBits(0xFFC3, 16);
     stream->writeBits(8 + 3 * ncomp, 16); // Length
-    stream->writeBits(8, 8);              // Sample precision (8-bit)
+    stream->writeBits(prec, 8);           // Sample precision (8 or 12)
     stream->writeBits(h, 16);             // Height
     stream->writeBits(w, 16);             // Width
     stream->writeBits(ncomp, 8);          // Number of components
@@ -285,53 +344,12 @@ bool fjpeg_generate_lossless(fjpeg_bitstream* stream, fjpeg_context* context, in
     // 6. Entropy-coded bitstream
     stream->avoidFF = true;
 
-    int mb_w = (w + 1) / 2;
-    int mb_h = (h + 1) / 2;
-
-    for (int mb_y = 0; mb_y < mb_h; mb_y++) {
-        for (int mb_x = 0; mb_x < mb_w; mb_x++) {
-            // Y component: 2x2 samples per MCU
-            for (int dy = 0; dy < 2; dy++) {
-                for (int dx = 0; dx < 2; dx++) {
-                    int px = mb_x * 2 + dx;
-                    int py = mb_y * 2 + dy;
-                    if (px < w && py < h) {
-                        int diff = fjpeg_calc_diff(context->fjpeg_y, w, h, px, py, predictor);
-                        int cat, bits;
-                        fjpeg_diff_to_vli(diff, &cat, &bits);
-                        stream->writeBits(huff_table_y[cat].code, huff_table_y[cat].len);
-                        if (cat > 0) {
-                            stream->writeBits(bits, cat);
-                        }
-                    }
-                }
-            }
-
-            // Cb & Cr components: 1 sample each per MCU
-            if (ncomp == 3) {
-                int px = mb_x;
-                int py = mb_y;
-                if (px < cw && py < ch) {
-                    // Cb
-                    int diff_cb = fjpeg_calc_diff(context->fjpeg_cb, cw, ch, px, py, predictor);
-                    int cat_cb, bits_cb;
-                    fjpeg_diff_to_vli(diff_cb, &cat_cb, &bits_cb);
-                    stream->writeBits(huff_table_c[cat_cb].code, huff_table_c[cat_cb].len);
-                    if (cat_cb > 0) {
-                        stream->writeBits(bits_cb, cat_cb);
-                    }
-
-                    // Cr
-                    int diff_cr = fjpeg_calc_diff(context->fjpeg_cr, cw, ch, px, py, predictor);
-                    int cat_cr, bits_cr;
-                    fjpeg_diff_to_vli(diff_cr, &cat_cr, &bits_cr);
-                    stream->writeBits(huff_table_c[cat_cr].code, huff_table_c[cat_cr].len);
-                    if (cat_cr > 0) {
-                        stream->writeBits(bits_cr, cat_cr);
-                    }
-                }
-            }
-        }
+    if (prec == 12) {
+        fjpeg_lossless_encode_scan(stream, context->fjpeg_y16, context->fjpeg_cb16, context->fjpeg_cr16,
+                                  w, h, cw, ch, ncomp, predictor, prec, huff_table_y, huff_table_c);
+    } else {
+        fjpeg_lossless_encode_scan(stream, context->fjpeg_y, context->fjpeg_cb, context->fjpeg_cr,
+                                  w, h, cw, ch, ncomp, predictor, prec, huff_table_y, huff_table_c);
     }
 
     stream->padToByte();
