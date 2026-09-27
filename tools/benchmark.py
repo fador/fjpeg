@@ -32,6 +32,8 @@ def evaluate_image(yuv_file, width=640, height=480, fjpeg_bin='build/Release/fjp
         ('trellis', ['-t']),
         ('progressive', ['-p']),
         ('prog+trellis', ['-p', '-t']),
+        ('arithmetic', ['-a']),
+        ('arith+trellis', ['-a', '-t']),
     ]
     
     results = {}
@@ -120,16 +122,21 @@ def evaluate_12bit_image(yuv_file, width=640, height=480, fjpeg_bin='build/Relea
     for q in [50, 70, 90]:
         jpg_dct = f'tmp_12bit_q{q}.jpg'
         yuv_dct = f'tmp_12bit_q{q}.yuv'
+        jpg_arith = f'tmp_12bit_arith_q{q}.jpg'
         subprocess.run([fjpeg_bin, '-i', yuv_file, '-r', f'{width}x{height}', '-b', '12', '-q', str(q), '-o', jpg_dct], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([fjpeg_bin, '-i', yuv_file, '-r', f'{width}x{height}', '-b', '12', '-a', '-q', str(q), '-o', jpg_arith], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         dct_sz = os.path.getsize(jpg_dct)
+        arith_sz = os.path.getsize(jpg_arith)
         subprocess.run([fjpeg_bin, '-d', '-i', jpg_dct, '-o', yuv_dct], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         with open(yuv_dct, 'rb') as f:
             dec = np.frombuffer(f.read(), dtype=np.uint16)
         mse = np.mean((orig.astype(float) - dec.astype(float))**2)
         p = 10.0 * np.log10(4095.0**2 / mse) if mse > 0 else 99.99
-        print(f"12-bit DCT q={q:<2}  | Compressed: {dct_sz:6d} bytes | PSNR: {p:.2f} dB")
+        saving = (dct_sz - arith_sz) / dct_sz * 100.0
+        print(f"12-bit DCT q={q:<2}  | Base: {dct_sz:6d} B | Arith: {arith_sz:6d} B ({saving:+.1f}%) | PSNR: {p:.2f} dB")
         try:
             os.remove(jpg_dct)
+            os.remove(jpg_arith)
             os.remove(yuv_dct)
         except:
             pass

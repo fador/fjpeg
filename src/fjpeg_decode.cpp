@@ -37,6 +37,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "fjpeg_bitstream.h"
 #include "fjpeg_transquant.h"
 #include "fjpeg_lossless.h"
+#include "fjpeg_arith.h"
 
 // ---------------------------------------------------------------------------
 // Byte/bit reader
@@ -141,6 +142,10 @@ public:
             }
             return (0xFF << 8) | (c & 0xFF);
         }
+    }
+
+    void set_pending_marker(int marker) {
+        pending_marker = marker;
     }
 
     // Consume a restart marker at an MCU boundary.
@@ -262,15 +267,106 @@ static inline int fjpeg_zigzag_scan(int k) {
 }
 
 // ---------------------------------------------------------------------------
+// Arithmetic (QM-Coder) decoder
+// ---------------------------------------------------------------------------
+struct fjpeg_arith_decoder {
+    fjpeg_byte_reader* reader;
+    int32_t c;
+    int32_t a;
+    int ct;
+    int unread_marker;
+
+    explicit fjpeg_arith_decoder(fjpeg_byte_reader* r) : reader(r), c(0), a(0), ct(-16), unread_marker(0) {}
+
+    void init(fjpeg_byte_reader* r) {
+        reader = r;
+        c = 0;
+        a = 0;
+        ct = -16;
+        unread_marker = 0;
+    }
+
+    int get_byte() {
+        int data = reader->read_u8();
+        if (data == 0xFF) {
+            do {
+                data = reader->read_u8();
+            } while (data == 0xFF);
+            if (data == 0) {
+                data = 0xFF;
+            } else {
+                unread_marker = data;
+                data = 0;
+            }
+        }
+        return data;
+    }
+
+    int decode(uint8_t* st) {
+        while (a < 0x8000) {
+            if (--ct < 0) {
+                int data;
+                if (unread_marker) {
+                    data = 0;
+                } else {
+                    data = get_byte();
+                }
+                c = (c << 8) | (data & 0xFF);
+                if ((ct += 8) < 0) {
+                    if (++ct == 0) {
+                        a = 0x8000;
+                    }
+                }
+            }
+            a <<= 1;
+        }
+
+        int sv = *st;
+        uint32_t qe = fjpeg_aritab[sv & 0x7F];
+        uint8_t nl = (uint8_t)(qe & 0xFF); qe >>= 8;
+        uint8_t nm = (uint8_t)(qe & 0xFF); qe >>= 8;
+
+        int32_t temp = a - qe;
+        a = temp;
+        temp <<= ct;
+        if (c >= temp) {
+            c -= temp;
+            if (a < (int32_t)qe) {
+                a = qe;
+                *st = (sv & 0x80) ^ nm;
+            } else {
+                a = qe;
+                *st = (sv & 0x80) ^ nl;
+                sv ^= 0x80;
+            }
+        } else if (a < 0x8000) {
+            if (a < (int32_t)qe) {
+                *st = (sv & 0x80) ^ nl;
+                sv ^= 0x80;
+            } else {
+                *st = (sv & 0x80) ^ nm;
+            }
+        }
+
+        return sv >> 7;
+    }
+};
+
+// ---------------------------------------------------------------------------
 // Decoder
 // ---------------------------------------------------------------------------
 class fjpeg_decoder {
 public:
     fjpeg_decoder()
         : reader(nullptr), width(0), height(0), max_h(1), max_v(1), num_comps(0),
-          progressive(false), lossless(false), precision(8), restart_interval(0),
+          progressive(false), lossless(false), arithmetic(false), precision(8), restart_interval(0),
           mcus_per_row(0), mcus_per_col(0) {
         memset(quant_tables, 0, sizeof(quant_tables));
+        for (int i = 0; i < 4; i++) {
+            arith_dc_L[i] = 0;
+            arith_dc_U[i] = 1;
+            arith_ac_K[i] = 5;
+        }
     }
 
     bool decode(FILE* fp) {
@@ -302,6 +398,8 @@ public:
                 case 0xFFC1: if (!parse_sof(length, false)) return false; break;
                 case 0xFFC2: if (!parse_sof(length, true)) return false; break;
                 case 0xFFC3: if (!parse_sof_lossless(length)) return false; break;
+                case 0xFFC9: arithmetic = true; if (!parse_sof(length, false)) return false; break;
+                case 0xFFCC: if (!parse_dac(length)) return false; break;
                 case 0xFFC4: if (!parse_dht(length)) return false; break;
                 case 0xFFDD: restart_interval = reader->read_u16(); break;
                 case 0xFFDA: if (!parse_sos(length)) return false; break;
@@ -484,6 +582,26 @@ private:
         return true;
     }
 
+    bool parse_dac(int length) {
+        int remaining = length - 2;
+        while (remaining > 0) {
+            if (remaining < 2) return false;
+            int tc_tb = reader->read_u8();
+            int cs = reader->read_u8();
+            remaining -= 2;
+            int tc = (tc_tb >> 4) & 0x0F;
+            int tb = tc_tb & 0x0F;
+            if (tb > 3) return false;
+            if (tc == 0) {
+                arith_dc_L[tb] = cs & 0x0F;
+                arith_dc_U[tb] = (cs >> 4) & 0x0F;
+            } else {
+                arith_ac_K[tb] = cs & 0xFF;
+            }
+        }
+        return true;
+    }
+
     bool parse_sof_lossless(int length) {
         (void)length;
         lossless = true;
@@ -623,6 +741,10 @@ private:
 
         if (lossless) {
             return decode_lossless_scan(scan_comp, dc_sel, ns, ss, al);
+        }
+
+        if (arithmetic) {
+            return decode_sequential_arith(scan_comp, dc_sel, ac_sel, ns);
         }
 
         if (!progressive) {
@@ -796,6 +918,179 @@ private:
             blk[k] = (int16_t)fjpeg_extend(reader->read_bits(s), s);
             k++;
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Arithmetic Sequential (SOF9) decoding
+    // -----------------------------------------------------------------------
+    int decode_dc_arith(fjpeg_arith_decoder& arith, uint8_t* dc_stat, int& last_dc, int& dc_ctx, int tbl) {
+        uint8_t* st = dc_stat + dc_ctx;
+        if (arith.decode(st) == 0) {
+            dc_ctx = 0;
+            return last_dc;
+        }
+
+        int sign = arith.decode(st + 1);
+        if (sign == 0) {
+            st += 2;
+            dc_ctx = 4;
+        } else {
+            st += 3;
+            dc_ctx = 8;
+        }
+
+        int m = 0;
+        if (arith.decode(st) != 0) {
+            m = 1;
+            st = dc_stat + 20;
+            while (arith.decode(st) != 0) {
+                m <<= 1;
+                st += 1;
+            }
+        }
+
+        if (m < ((1 << arith_dc_L[tbl]) >> 1)) {
+            dc_ctx = 0;
+        } else if (m > ((1 << arith_dc_U[tbl]) >> 1)) {
+            dc_ctx += 8;
+        }
+
+        int v = m;
+        st += 14;
+        while (m >>= 1) {
+            if (arith.decode(st)) {
+                v |= m;
+            }
+        }
+        v += 1;
+        if (sign != 0) v = -v;
+
+        last_dc += v;
+        return last_dc;
+    }
+
+    bool decode_block_arith(fjpeg_dec_component& c, int bx, int by, int dc_tbl, int ac_tbl, int ci,
+                            fjpeg_arith_decoder& arith,
+                            uint8_t dc_stats[4][FJPEG_ARITH_DC_STAT_BINS],
+                            uint8_t ac_stats[4][FJPEG_ARITH_AC_STAT_BINS],
+                            uint8_t fixed_bin[4],
+                            int last_dc[4],
+                            int dc_context[4]) {
+        int16_t* blk = &c.coeff[((size_t)by * c.blocks_w + bx) * 64];
+        memset(blk, 0, 64 * sizeof(int16_t));
+
+        blk[0] = (int16_t)decode_dc_arith(arith, dc_stats[dc_tbl], last_dc[ci], dc_context[ci], dc_tbl);
+
+        for (int k = 1; k <= 63; k++) {
+            uint8_t* st = ac_stats[ac_tbl] + 3 * (k - 1);
+            if (arith.decode(st)) {
+                break; // EOB
+            }
+            while (arith.decode(st + 1) == 0) {
+                st += 3;
+                k++;
+                if (k > 63) return false;
+            }
+
+            int sign = arith.decode(fixed_bin);
+            st += 2;
+            int m = 0;
+            if (arith.decode(st) != 0) {
+                m = 1;
+                if (arith.decode(st) != 0) {
+                    m = 2;
+                    st = ac_stats[ac_tbl] + (k <= arith_ac_K[ac_tbl] ? 189 : 217);
+                    while (arith.decode(st) != 0) {
+                        m <<= 1;
+                        st += 1;
+                    }
+                }
+            }
+
+            int v = m;
+            st += 14;
+            while (m >>= 1) {
+                if (arith.decode(st)) {
+                    v |= m;
+                }
+            }
+            v += 1;
+            blk[k] = (int16_t)(sign ? -v : v);
+        }
+
+        return true;
+    }
+
+    bool decode_sequential_arith(int* scan_comp, int* dc_sel, int* ac_sel, int ns) {
+        fjpeg_arith_decoder arith(reader);
+
+        uint8_t dc_stats[4][FJPEG_ARITH_DC_STAT_BINS];
+        uint8_t ac_stats[4][FJPEG_ARITH_AC_STAT_BINS];
+        uint8_t fixed_bin[4];
+        memset(dc_stats, 0, sizeof(dc_stats));
+        memset(ac_stats, 0, sizeof(ac_stats));
+        memset(fixed_bin, 0, sizeof(fixed_bin));
+        fixed_bin[0] = 113;
+
+        int last_dc[4] = {0, 0, 0, 0};
+        int dc_context[4] = {0, 0, 0, 0};
+
+        if (ns > 1) {
+            int mcu = 0;
+            for (int my = 0; my < mcus_per_col; my++) {
+                for (int mx = 0; mx < mcus_per_row; mx++) {
+                    if (restart_interval > 0 && mcu > 0 && (mcu % restart_interval) == 0) {
+                        memset(dc_stats, 0, sizeof(dc_stats));
+                        memset(ac_stats, 0, sizeof(ac_stats));
+                        memset(last_dc, 0, sizeof(last_dc));
+                        memset(dc_context, 0, sizeof(dc_context));
+                        arith.init(reader);
+                    }
+                    for (int s = 0; s < ns; s++) {
+                        fjpeg_dec_component& c = comps[scan_comp[s]];
+                        int ci = scan_comp[s];
+                        for (int v = 0; v < c.v; v++) {
+                            for (int h = 0; h < c.h; h++) {
+                                if (!decode_block_arith(c, mx * c.h + h, my * c.v + v,
+                                                        dc_sel[s], ac_sel[s], ci,
+                                                        arith, dc_stats, ac_stats, fixed_bin,
+                                                        last_dc, dc_context)) {
+                                    return false;
+                                }
+                            }
+                        }
+                    }
+                    mcu++;
+                }
+            }
+        } else {
+            fjpeg_dec_component& c = comps[scan_comp[0]];
+            int ci = scan_comp[0];
+            int mcu = 0;
+            for (int by = 0; by < c.std_blocks_h; by++) {
+                for (int bx = 0; bx < c.std_blocks_w; bx++) {
+                    if (restart_interval > 0 && mcu > 0 && (mcu % restart_interval) == 0) {
+                        memset(dc_stats, 0, sizeof(dc_stats));
+                        memset(ac_stats, 0, sizeof(ac_stats));
+                        memset(last_dc, 0, sizeof(last_dc));
+                        memset(dc_context, 0, sizeof(dc_context));
+                        arith.init(reader);
+                    }
+                    if (!decode_block_arith(c, bx, by, dc_sel[0], ac_sel[0], ci,
+                                            arith, dc_stats, ac_stats, fixed_bin,
+                                            last_dc, dc_context)) {
+                        return false;
+                    }
+                    mcu++;
+                }
+            }
+        }
+
+        if (arith.unread_marker > 0) {
+            reader->set_pending_marker((0xFF << 8) | arith.unread_marker);
+        }
+
+        return true;
     }
 
     // -----------------------------------------------------------------------
@@ -985,6 +1280,10 @@ private:
     int num_comps;
     bool progressive;
     bool lossless;
+    bool arithmetic;
+    int arith_dc_L[4];
+    int arith_dc_U[4];
+    int arith_ac_K[4];
     int precision;
     int restart_interval;
     int mcus_per_row;

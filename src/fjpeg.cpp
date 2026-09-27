@@ -369,6 +369,7 @@ void fjpeg_print_usage() {
     printf("  -o <output_filename>  Output JPEG file\r\n");
     printf("  -t  Enable rate-distortion optimized (trellis) quantization\r\n");
     printf("  -p  Write a progressive JPEG (spectral selection + AC successive approximation)\r\n");
+    printf("  -a, -arith  Write an arithmetic-coded JPEG (ITU-T T.81 SOF9 / DAC)\r\n");
     printf("  -lossless, -ll  Write a lossless JPEG (ITU-T T.81 SOF3 DPCM)\r\n");
     printf("  -pred <1-7>  Select lossless predictor (1-7, default 0=auto best)\r\n");
     printf("  -b <8|12>  Set sample bit depth (8 or 12, default 8)\r\n");

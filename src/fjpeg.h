@@ -276,5 +276,6 @@ void fjpeg_print_usage();
 bool fjpeg_generate_header(fjpeg_bitstream* stream, fjpeg_context* context);
 bool fjpeg_generate_progressive(fjpeg_bitstream* stream, fjpeg_context* context);
 bool fjpeg_generate_lossless(fjpeg_bitstream* stream, fjpeg_context* context, int predictor = 0);
+bool fjpeg_generate_arithmetic(fjpeg_bitstream* stream, fjpeg_context* context);
 void fjpeg_trellis_optimize(fjpeg_context* context);
 bool fjpeg_decode_file(const char* input_filename, const char* output_filename);

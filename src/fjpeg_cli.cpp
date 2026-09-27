@@ -53,6 +53,7 @@ int main(int argc, char** argv) {
     bool encode = true;
     bool progressive = false;
     bool lossless = false;
+    bool arithmetic = false;
     int predictor = 0;
     int bit_depth = 8;
     float trellis_lambda = 0.0f;
@@ -122,6 +123,9 @@ int main(int argc, char** argv) {
         }
         else if(strcmp(argv[i], "-lossless") == 0 || strcmp(argv[i], "--lossless") == 0 || strcmp(argv[i], "-ll") == 0) {
             lossless = true;
+        }
+        else if(strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "-arith") == 0 || strcmp(argv[i], "--arithmetic") == 0) {
+            arithmetic = true;
         }
         else if(strcmp(argv[i], "-pred") == 0 || strcmp(argv[i], "--pred") == 0) {
             if(i+1 < argc) {
@@ -246,6 +250,8 @@ int main(int argc, char** argv) {
     start = std::chrono::high_resolution_clock::now();
     if(lossless) {
         fjpeg_generate_lossless(stream, context, predictor);
+    } else if(arithmetic) {
+        fjpeg_generate_arithmetic(stream, context);
     } else if(progressive) {
         fjpeg_generate_progressive(stream, context);
     } else {

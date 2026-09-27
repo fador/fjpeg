@@ -9,7 +9,7 @@ set(CMAKE_CXX_STANDARD 11)
 include_directories(src)
 
 # Add the source file(s) to the project
-list(APPEND SOURCE_FILES src/fjpeg.cpp src/fjpeg_transquant.cpp src/fjpeg_huffman.cpp src/fjpeg_progressive.cpp src/fjpeg_decode.cpp src/fjpeg_lossless.cpp)
+list(APPEND SOURCE_FILES src/fjpeg.cpp src/fjpeg_transquant.cpp src/fjpeg_huffman.cpp src/fjpeg_progressive.cpp src/fjpeg_decode.cpp src/fjpeg_lossless.cpp src/fjpeg_arith.cpp)
 list(APPEND SOURCE_FILES_CLI src/fjpeg_cli.cpp)
 
 # Create a static library
@@ -34,5 +34,3 @@ target_link_libraries(fjpeg-cli PUBLIC fjpeg)
 # Make the cli binary output name fjpeg
 set_target_properties(fjpeg-cli PROPERTIES OUTPUT_NAME fjpeg)
 set_target_properties(fjpeg-cli PROPERTIES RUNTIME_OUTPUT_NAME fjpeg)
-
-add_executable(fjpeg-arith src/fjpeg_arith.cpp)
