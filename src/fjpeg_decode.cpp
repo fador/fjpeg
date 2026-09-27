@@ -36,6 +36,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "fjpeg.h"
 #include "fjpeg_bitstream.h"
 #include "fjpeg_transquant.h"
+#include "fjpeg_lossless.h"
 
 // ---------------------------------------------------------------------------
 // Byte/bit reader
@@ -266,7 +267,8 @@ class fjpeg_decoder {
 public:
     fjpeg_decoder()
         : reader(nullptr), width(0), height(0), max_h(1), max_v(1), num_comps(0),
-          progressive(false), restart_interval(0), mcus_per_row(0), mcus_per_col(0) {
+          progressive(false), lossless(false), precision(8), restart_interval(0),
+          mcus_per_row(0), mcus_per_col(0) {
         memset(quant_tables, 0, sizeof(quant_tables));
     }
 
@@ -298,6 +300,7 @@ public:
                 case 0xFFC0: if (!parse_sof(length, false)) return false; break;
                 case 0xFFC1: if (!parse_sof(length, false)) return false; break;
                 case 0xFFC2: if (!parse_sof(length, true)) return false; break;
+                case 0xFFC3: if (!parse_sof_lossless(length)) return false; break;
                 case 0xFFC4: if (!parse_dht(length)) return false; break;
                 case 0xFFDD: restart_interval = reader->read_u16(); break;
                 case 0xFFDA: if (!parse_sos(length)) return false; break;
@@ -316,6 +319,15 @@ public:
         if (!fp) {
             fprintf(stderr, "Error: Unable to open output file\n");
             return false;
+        }
+
+        if (lossless) {
+            for (int ci = 0; ci < num_comps; ci++) {
+                fjpeg_dec_component& c = comps[ci];
+                fwrite(c.plane.data(), 1, (size_t)c.width * c.height, fp);
+            }
+            fclose(fp);
+            return true;
         }
 
         // Decode every block into its component plane.
@@ -440,6 +452,50 @@ private:
         return true;
     }
 
+    bool parse_sof_lossless(int length) {
+        (void)length;
+        lossless = true;
+        progressive = false;
+        precision = reader->read_u8();
+        if (precision != 8 && precision != 12 && precision != 16) {
+            fprintf(stderr, "Error: Unsupported precision %d for lossless JPEG\n", precision);
+            return false;
+        }
+        height = reader->read_u16();
+        width = reader->read_u16();
+        num_comps = reader->read_u8();
+        if (num_comps < 1 || num_comps > 4) {
+            fprintf(stderr, "Error: Unsupported component count %d\n", num_comps);
+            return false;
+        }
+
+        comps.resize(num_comps);
+        max_h = 1;
+        max_v = 1;
+        for (int i = 0; i < num_comps; i++) {
+            comps[i].id = reader->read_u8();
+            int hv = reader->read_u8();
+            comps[i].h = (hv >> 4) & 0x0F;
+            comps[i].v = hv & 0x0F;
+            comps[i].quant_id = reader->read_u8();
+            if (comps[i].h < 1) comps[i].h = 1;
+            if (comps[i].v < 1) comps[i].v = 1;
+            max_h = FJPEG_MAX(max_h, comps[i].h);
+            max_v = FJPEG_MAX(max_v, comps[i].v);
+        }
+
+        mcus_per_row = (width + max_h - 1) / max_h;
+        mcus_per_col = (height + max_v - 1) / max_v;
+
+        for (int i = 0; i < num_comps; i++) {
+            fjpeg_dec_component& c = comps[i];
+            c.width = (width * c.h + max_h - 1) / max_h;
+            c.height = (height * c.v + max_v - 1) / max_v;
+            c.plane.assign((size_t)c.width * c.height, 0);
+        }
+        return true;
+    }
+
     bool parse_sof(int length, bool prog) {
         (void)length;
         progressive = prog;
@@ -525,6 +581,10 @@ private:
         int ah = (a >> 4) & 0x0F;
         int al = a & 0x0F;
 
+        if (lossless) {
+            return decode_lossless_scan(scan_comp, dc_sel, ns, ss, al);
+        }
+
         if (!progressive) {
             return decode_sequential(scan_comp, dc_sel, ac_sel, ns);
         }
@@ -532,6 +592,82 @@ private:
             return decode_progressive_dc(scan_comp, dc_sel, ns, ah, al);
         }
         return decode_progressive_ac(scan_comp, ns, ss, se, ah, al);
+    }
+
+    // -----------------------------------------------------------------------
+    // Lossless (SOF3) decoding
+    // -----------------------------------------------------------------------
+    bool decode_lossless_scan(const int* scan_comp, const int* dc_sel, int ns, int predictor, int pt) {
+        if (ns > 1) {
+            // Interleaved scan across all components in scan
+            for (int my = 0; my < mcus_per_col; my++) {
+                for (int mx = 0; mx < mcus_per_row; mx++) {
+                    for (int s = 0; s < ns; s++) {
+                        fjpeg_dec_component& c = comps[scan_comp[s]];
+                        int th = dc_sel[s];
+                        for (int v = 0; v < c.v; v++) {
+                            for (int h = 0; h < c.h; h++) {
+                                int px = mx * c.h + h;
+                                int py = my * c.v + v;
+                                if (px < c.width && py < c.height) {
+                                    int pred;
+                                    if (py == 0 && px == 0) {
+                                        pred = 1 << (precision - pt - 1);
+                                    } else if (py == 0) {
+                                        pred = c.plane[py * c.width + (px - 1)];
+                                    } else if (px == 0) {
+                                        pred = c.plane[(py - 1) * c.width + px];
+                                    } else {
+                                        int l  = c.plane[py * c.width + (px - 1)];
+                                        int t  = c.plane[(py - 1) * c.width + px];
+                                        int tl = c.plane[(py - 1) * c.width + (px - 1)];
+                                        pred = fjpeg_lossless_predict(tl, t, l, predictor);
+                                    }
+
+                                    int cat = dc_tables[th].decode(*reader);
+                                    int diff = 0;
+                                    if (cat > 0) {
+                                        int bits = reader->read_bits(cat);
+                                        diff = fjpeg_extend(bits, cat);
+                                    }
+                                    c.plane[py * c.width + px] = (uint8_t)((pred + (diff << pt)) & ((1 << precision) - 1));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Non-interleaved scan: line-by-line raster
+            fjpeg_dec_component& c = comps[scan_comp[0]];
+            int th = dc_sel[0];
+            for (int py = 0; py < c.height; py++) {
+                for (int px = 0; px < c.width; px++) {
+                    int pred;
+                    if (py == 0 && px == 0) {
+                        pred = 1 << (precision - pt - 1);
+                    } else if (py == 0) {
+                        pred = c.plane[py * c.width + (px - 1)];
+                    } else if (px == 0) {
+                        pred = c.plane[(py - 1) * c.width + px];
+                    } else {
+                        int l  = c.plane[py * c.width + (px - 1)];
+                        int t  = c.plane[(py - 1) * c.width + px];
+                        int tl = c.plane[(py - 1) * c.width + (px - 1)];
+                        pred = fjpeg_lossless_predict(tl, t, l, predictor);
+                    }
+
+                    int cat = dc_tables[th].decode(*reader);
+                    int diff = 0;
+                    if (cat > 0) {
+                        int bits = reader->read_bits(cat);
+                        diff = fjpeg_extend(bits, cat);
+                    }
+                    c.plane[py * c.width + px] = (uint8_t)((pred + (diff << pt)) & ((1 << precision) - 1));
+                }
+            }
+        }
+        return true;
     }
 
     // -----------------------------------------------------------------------
@@ -792,6 +928,8 @@ private:
     int max_v;
     int num_comps;
     bool progressive;
+    bool lossless;
+    int precision;
     int restart_interval;
     int mcus_per_row;
     int mcus_per_col;

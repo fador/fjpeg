@@ -122,6 +122,7 @@ class fjpeg_bitstream {
             }
             offset -= 8;
         }
+        current = (offset == 0) ? 0 : (current & ((1u << offset) - 1));
     }
 
     void flushToFile() {

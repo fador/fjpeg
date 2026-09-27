@@ -40,6 +40,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "fjpeg.h"
 #include "fjpeg_bitstream.h"
 #include "fjpeg_transquant.h"
+#include "fjpeg_lossless.h"
 
 int main(int argc, char** argv) {
     printf("FJPEG %s\n", fjpeg_version());
@@ -51,6 +52,8 @@ int main(int argc, char** argv) {
     int height = 0;
     bool encode = true;
     bool progressive = false;
+    bool lossless = false;
+    int predictor = 0;
     float trellis_lambda = 0.0f;
 
     // Parse filename, quality and resolution
@@ -115,6 +118,22 @@ int main(int argc, char** argv) {
         }
         else if(strcmp(argv[i], "-p") == 0) {
             progressive = true;
+        }
+        else if(strcmp(argv[i], "-lossless") == 0 || strcmp(argv[i], "--lossless") == 0 || strcmp(argv[i], "-ll") == 0) {
+            lossless = true;
+        }
+        else if(strcmp(argv[i], "-pred") == 0 || strcmp(argv[i], "--pred") == 0) {
+            if(i+1 < argc) {
+                predictor = atoi(argv[i+1]);
+                if(predictor < 1 || predictor > 7) {
+                    fprintf(stderr, "Error: Invalid predictor value (must be 1-7)\n");
+                    return 1;
+                }
+            } else {
+                fprintf(stderr, "Error: Missing predictor value\n");
+                return 1;
+            }
+            i++;
         }
         else if(strcmp(argv[i], "-l") == 0) {
             if(i+1 < argc) {
@@ -194,53 +213,11 @@ int main(int argc, char** argv) {
     #endif
 
     start = std::chrono::high_resolution_clock::now();
-    fjpeg_transquant_input(context);
-
+    if (!lossless) {
+        fjpeg_transquant_input(context);
+    }
     end = std::chrono::high_resolution_clock::now();
     time_dct_quant_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-
-#ifdef FJPEG_DEBUG_DCT_BLOCK
-    FILE* dct_out = fopen("dct.yuv", "wb");
-    for(int y = 0; y < 720; y++) {
-        for(int x = 0; x < 1280; x++) {
-            uint8_t val = FJPEG_CLAMP(128+context->fjpeg_ydct[y*1280+x], 0, 255);
-            fwrite(&val, 1,1, dct_out);
-        }
-    }
-    fclose(dct_out);
-
-
-    FILE* idct_out = fopen("idct.yuv", "wb");
-    for(int y = 0; y < 720; y++) {
-        for(int x = 0; x < 1280; x++) {
-            uint8_t val = FJPEG_CLAMP(image[y*1280+x], 0, 255);
-            fwrite(&val, 1,1, idct_out);
-        }
-    }
-    fclose(idct_out);
-#endif
-
-
-#ifdef FJPEG_TEST_DCT
-    //fjpeg_pixel_t cur_block[64];
-    //fjpeg_coeff_t dct_block[64];
-    fjpeg_pixel_t cur_block2[64] = {
-        52, 55, 61, 66, 70, 61, 64, 73,
-        63, 59, 55, 90, 109, 85, 69, 72,
-        62, 59, 68, 113, 144, 104, 66, 73,
-        63, 58, 71, 122, 154, 106, 70, 69,
-        67, 61, 68, 104, 126, 88, 68, 70,
-        79, 65, 60, 70, 77, 68, 58, 75,
-        85, 71, 64, 59, 55, 61, 65, 83,
-        87, 79, 69, 68, 65, 76, 78, 94
-    };
-    
-    fjpeg_dct8x8(cur_block2, dct_block);
-    for(int i = 0; i < 64; i++) {
-        printf("%.2f ", dct_block[i]);
-        if((i+1)%8 == 0) printf("\r\n");
-    }
-#endif
 
     FILE *fp = fopen(output_filename.c_str(), "wb");
     if(!fp) {
@@ -250,7 +227,9 @@ int main(int argc, char** argv) {
     fjpeg_bitstream* stream = new fjpeg_bitstream(fp);
 
     start = std::chrono::high_resolution_clock::now();
-    if(progressive) {
+    if(lossless) {
+        fjpeg_generate_lossless(stream, context, predictor);
+    } else if(progressive) {
         fjpeg_generate_progressive(stream, context);
     } else {
         fjpeg_generate_header(stream, context);

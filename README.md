@@ -18,11 +18,13 @@ stage of the pipeline.
   coefficients
 * Progressive mode: separate DC (with successive approximation) and
   per-component AC spectral-selection scans
+* Lossless JPEG mode: ITU-T T.81 Annex H (SOF3) spatial DPCM with predictors
+  1-7 and automatic rate-distortion predictor selection
 * Standard ITU-T T.81 quantization tables with libjpeg-compatible quality
   scaling, plus a tunable quantization deadzone
 * 4:2:0 chroma subsampling and a separable (2-pass) FDCT
 * Optional arithmetic-coding experiment (`fjpeg_arith`)
-* Baseline and progressive JPEG decoding back to raw YUV 4:2:0
+* Baseline, progressive, and lossless JPEG decoding back to raw YUV 4:2:0
 
 **Building**
 
@@ -43,14 +45,17 @@ On single-config generators (Make/Ninja) it is `build/fjpeg`.
 # followed by (width*height)/4 Cb and (width*height)/4 Cr bytes
 ./fjpeg -i input.yuv -r 1280x720 -q 70 -o output.jpg
 
-# decode a baseline or progressive JPEG back to raw YUV 4:2:0
+# lossless compression with automatic predictor selection
+./fjpeg -i input.yuv -r 1280x720 -lossless -o output.jpg
+
+# decode a baseline, progressive, or lossless JPEG back to raw YUV 4:2:0
 ./fjpeg -d -i input.jpg -o output.yuv
 ```
 
-The decoder accepts sequential (SOF0) and progressive (SOF2) 8-bit JPEGs,
-including progressive DC and AC successive approximation. The resolution is
-taken from the JPEG headers; the output is raw YUV with each component stored
-at its own sampling resolution (Y plane, then Cb, then Cr for 4:2:0).
+The decoder accepts sequential (SOF0), progressive (SOF2), and lossless (SOF3)
+JPEGs. The resolution is taken from the JPEG headers; the output is raw YUV with
+each component stored at its own sampling resolution (Y plane, then Cb, then Cr
+for 4:2:0).
 
 Options:
 
@@ -62,7 +67,9 @@ Options:
 -t                     enable rate-distortion optimized (trellis) quantization
 -l <lambda>            trellis Lagrange multiplier (default 0.007)
 -p                     write a progressive JPEG
--d                     decode an existing JPEG (baseline or progressive)
+-lossless, -ll         write a lossless JPEG (ITU-T T.81 SOF3 DPCM)
+-pred <1-7>            select lossless predictor (1-7, default 0=auto best)
+-d                     decode an existing JPEG (baseline, progressive, or lossless)
 -h                     show help
 ```
 
@@ -75,6 +82,8 @@ Options:
 | `src/fjpeg_transquant.cpp` | block extraction, FDCT/IDCT, quantization, zigzag, trellis |
 | `src/fjpeg_huffman.cpp` | statistics pass, optimal Huffman generation, entropy coding |
 | `src/fjpeg_progressive.cpp` | progressive frame/scan layout and scan entropy coding |
+| `src/fjpeg_lossless.h` | lossless JPEG declarations and predictor helper |
+| `src/fjpeg_lossless.cpp` | ITU-T T.81 SOF3 lossless DPCM encoding and auto-prediction |
 | `src/fjpeg_bitstream.h` | bit reader/writer, 0xFF stuffing, file flushing |
 | `src/fjpeg_global.h` | types, default quantization tables, zigzag tables |
 | `src/fjpeg_huffman.h` | default Huffman tables and statistics struct |
@@ -199,8 +208,8 @@ Enabled with `-t` (with default Lagrange multiplier `-l 0.007`):
 
 **Limitations**
 
-* Sequential and progressive JPEG output only; no 12-bit, lossless or
-  arithmetic-coded JPEG output.
+* Sequential, progressive, and lossless (SOF3) JPEG output only; no 12-bit
+  or arithmetic-coded JPEG output.
 * Raw YUV 4:2:0 input only; there is no color-space conversion or file-format
   handling. Width and height must be even; edge blocks for non-MCU-aligned
   dimensions are handled by replicating the last row/column.

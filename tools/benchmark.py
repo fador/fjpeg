@@ -75,6 +75,25 @@ def evaluate_image(yuv_file, width=640, height=480, fjpeg_bin='build/Release/fjp
             bd = bd_rate(base_rates, base_psnrs, rates, psnrs)
             bd_str = f"{bd:+.2f}%"
         print(f"{name:<15} | {q_strs[0]:<18} | {q_strs[1]:<18} | {q_strs[2]:<18} | {q_strs[3]:<18} | {bd_str:<16}")
+
+    # Lossless benchmark
+    jpg_ll = 'tmp_lossless.jpg'
+    yuv_ll = 'tmp_lossless.yuv'
+    subprocess.run([fjpeg_bin, '-i', yuv_file, '-r', f'{width}x{height}', '-lossless', '-o', jpg_ll], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ll_sz = os.path.getsize(jpg_ll)
+    subprocess.run([fjpeg_bin, '-d', '-i', jpg_ll, '-o', yuv_ll], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    with open(yuv_file, 'rb') as f1, open(yuv_ll, 'rb') as f2:
+        exact = (f1.read() == f2.read())
+    raw_sz = width * height * 3 // 2
+    ratio = raw_sz / ll_sz
+    bpp = (ll_sz * 8) / (width * height)
+    print(f"Lossless mode   | Compressed: {ll_sz} bytes | Ratio: {ratio:.2f}:1 | {bpp:.2f} bpp | Exact bit-for-bit: {exact}")
+    try:
+        os.remove(jpg_ll)
+        os.remove(yuv_ll)
+    except:
+        pass
+
     return results
 
 if __name__ == '__main__':
